@@ -1,0 +1,15 @@
+<!-- Paste as the FIRST thing in <head> of every page. Runs before first paint. -->
+<meta name="theme-color" content="#F5F1E6">
+<script>
+(function () {
+  try {
+    var pref = localStorage.getItem('fw-theme') || 'system';   // light | dark | system
+    var dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+    var r = document.documentElement;
+    r.setAttribute('data-theme', dark ? 'dark' : 'light');
+    r.setAttribute('data-theme-pref', pref);
+    var m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.content = dark ? '#0E1A14' : '#F5F1E6';
+  } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+})();
+</script>

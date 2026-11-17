@@ -1,0 +1,115 @@
+/* fieldwork. design tokens — the ONLY file that contains color values.
+   Theme is always resolved to data-theme="light" | "dark" on <html> by the inline
+   head script (the user's "system" choice is resolved via prefers-color-scheme).
+   Wrap anything that must stay light (print, PDF export) in .force-light. */
+
+:root, [data-theme="light"], .force-light {
+  color-scheme: light;
+
+  --bg:            #F5F1E6;
+  --surface:       #FFFDF6;
+  --surface-2:     #EEE9D9;
+  --border:        #DDD5BE;
+  --border-strong: #8A8166;
+  --overlay:       rgba(20, 30, 24, .45);
+
+  --text:          #1D2A22;
+  --text-muted:    #56635A;
+  --text-faint:    #6B766E;
+
+  --primary:       #1F4D36;
+  --primary-hover: #17402B;
+  --on-primary:    #FFFDF6;
+  --active-bg:     #DCE8D3;
+  --active-text:   #173A29;
+  --link:          #1F5C3F;
+  --focus:         #2F7A52;
+
+  --positive:      #1E6B43;
+  --negative:      #B3261E;
+  --badge-ok-bg:   #DCE8D3;  --badge-ok-text:   #173A29;
+  --badge-warn-bg: #F6E4B5;  --badge-warn-text: #5E3E00;
+  --badge-neg-bg:  #F7D9D5;  --badge-neg-text:  #8C1C16;
+  --badge-info-bg: #D9E6EE;  --badge-info-text: #1D4257;
+  --badge-mute-bg: #E6E0CC;  --badge-mute-text: #47524A;
+
+  --chart-1: #1F4D36; --chart-2: #B8862B; --chart-3: #4A7FA0;
+  --chart-4: #A4553A; --chart-5: #7A8F5B;
+  --chart-grid: #E3DCC6;
+
+  --map-filter: none;
+  --map-pin: #1F4D36; --map-pin-ring: #FFFDF6;
+
+  --shadow-1: 0 1px 2px rgba(29, 42, 34, .08);
+  --shadow-2: 0 6px 20px rgba(29, 42, 34, .10);
+
+  --chrome: #F5F1E6;   /* mirrors <meta name="theme-color"> and manifest */
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg:            #0E1A14;
+  --surface:       #15251D;
+  --surface-2:     #1C3027;
+  --border:        #2C4437;
+  --border-strong: #6C8B77;
+  --overlay:       rgba(0, 0, 0, .6);
+
+  --text:          #EDE6D0;
+  --text-muted:    #AEBAAB;
+  --text-faint:    #93A090;
+
+  --primary:       #5FB683;
+  --primary-hover: #74C795;
+  --on-primary:    #08140D;
+  --active-bg:     #2A4636;
+  --active-text:   #CFE7D6;
+  --link:          #8ED0A8;
+  --focus:         #8ED0A8;
+
+  --positive:      #7FD6A0;
+  --negative:      #FF8F85;
+  --badge-ok-bg:   #234233;  --badge-ok-text:   #BFE5CB;
+  --badge-warn-bg: #4A3A12;  --badge-warn-text: #F2D68A;
+  --badge-neg-bg:  #4F2420;  --badge-neg-text:  #FFB4AC;
+  --badge-info-bg: #1F3A4A;  --badge-info-text: #A9D3EA;
+  --badge-mute-bg: #26372E;  --badge-mute-text: #B9C4B6;
+
+  --chart-1: #6FC594; --chart-2: #E0B24F; --chart-3: #7FB2D4;
+  --chart-4: #E08A6B; --chart-5: #A9C084;
+  --chart-grid: #263C31;
+
+  /* light raster tiles get inverted for dark; pins are never filtered */
+  --map-filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9) saturate(.6);
+  --map-pin: #8ED0A8; --map-pin-ring: #0E1A14;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, .45);
+  --chrome: #0E1A14;
+}
+
+/* Non-color tokens, shared by both themes */
+:root {
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --fs-xs: .75rem; --fs-sm: .875rem; --fs-md: 1rem; --fs-lg: 1.25rem; --fs-xl: 1.75rem; --fs-2xl: 2.25rem;
+  --lh-body: 1.55; --lh-tight: 1.2;
+  --fw-regular: 400; --fw-medium: 500; --fw-bold: 650;
+
+  --sp-1: .25rem; --sp-2: .5rem; --sp-3: .75rem; --sp-4: 1rem;
+  --sp-5: 1.5rem; --sp-6: 2rem; --sp-7: 3rem;
+  --r-sm: 8px; --r-md: 14px; --r-lg: 20px; --r-pill: 999px;
+  --sidebar-w: 248px; --topbar-h: 60px; --tap: 44px;
+  --ease: cubic-bezier(.2, .7, .2, 1); --dur: 140ms;
+}
+@media (prefers-reduced-motion: reduce) { :root { --dur: 0ms; } }
+
+/* Base: reads variables only */
+html { background: var(--bg); color: var(--text); font-family: var(--font-body);
+       line-height: var(--lh-body); -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+::placeholder { color: var(--text-faint); }
+.map-tiles { filter: var(--map-filter); }
+.force-light { background: var(--bg); color: var(--text); }

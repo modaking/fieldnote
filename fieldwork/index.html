@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>fieldwork.</title>
+<meta name="theme-color" content="#F5F1E6">
+<script>
+(function () {
+  try {
+    var pref = localStorage.getItem('fw-theme') || 'system';
+    var dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+    var r = document.documentElement;
+    r.setAttribute('data-theme', dark ? 'dark' : 'light');
+    r.setAttribute('data-theme-pref', pref);
+    var m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.content = dark ? '#0E1A14' : '#F5F1E6';
+  } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+})();
+</script>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div id="app" aria-live="polite"><p class="boot">Loading…</p></div>
+<div id="toasts" role="status"></div>
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>

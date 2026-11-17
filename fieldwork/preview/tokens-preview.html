@@ -1,0 +1,72 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>fieldwork. tokens preview</title>
+<!-- Paste as the FIRST thing in <head> of every page. Runs before first paint. -->
+<meta name="theme-color" content="#F5F1E6">
+<script>
+(function () {
+  try {
+    var pref = localStorage.getItem('fw-theme') || 'system';   // light | dark | system
+    var dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+    var r = document.documentElement;
+    r.setAttribute('data-theme', dark ? 'dark' : 'light');
+    r.setAttribute('data-theme-pref', pref);
+    var m = document.querySelector('meta[name="theme-color"]');
+    if (m) m.content = dark ? '#0E1A14' : '#F5F1E6';
+  } catch (e) { document.documentElement.setAttribute('data-theme', 'light'); }
+})();
+</script>
+
+<link rel="stylesheet" href="../css/tokens.css">
+<style>
+body{padding:var(--sp-5);max-width:960px;margin:auto}
+h1{font-family:var(--font-display);font-weight:var(--fw-bold);font-size:var(--fs-xl);margin:0}
+.bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--sp-5)}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:var(--r-pill);overflow:hidden}
+.seg button{all:unset;cursor:pointer;padding:var(--sp-2) var(--sp-4);min-height:var(--tap);box-sizing:border-box;display:flex;align-items:center;font-size:var(--fs-sm)}
+.seg button[aria-pressed=true]{background:var(--active-bg);color:var(--active-text);font-weight:var(--fw-medium)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:var(--sp-4);margin-bottom:var(--sp-5)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:var(--sp-5);box-shadow:var(--shadow-1)}
+.card small{color:var(--text-muted)} .kpi{font-size:var(--fs-xl);font-weight:var(--fw-bold)}
+.neg{color:var(--negative)} .pos{color:var(--positive)}
+.btn{background:var(--primary);color:var(--on-primary);border:0;border-radius:var(--r-md);padding:var(--sp-3) var(--sp-5);min-height:var(--tap);font:inherit;font-weight:var(--fw-medium);cursor:pointer}
+.btn:hover{background:var(--primary-hover)}
+input{background:var(--surface);color:var(--text);border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:var(--sp-3);min-height:var(--tap);box-sizing:border-box;font:inherit}
+.badge{display:inline-block;border-radius:var(--r-pill);padding:2px var(--sp-3);font-size:var(--fs-xs);font-weight:var(--fw-medium);margin-right:var(--sp-2)}
+.ok{background:var(--badge-ok-bg);color:var(--badge-ok-text)} .warn{background:var(--badge-warn-bg);color:var(--badge-warn-text)}
+.bad{background:var(--badge-neg-bg);color:var(--badge-neg-text)} .info{background:var(--badge-info-bg);color:var(--badge-info-text)} .mute{background:var(--badge-mute-bg);color:var(--badge-mute-text)}
+table{width:100%;border-collapse:collapse;background:var(--surface);border-radius:var(--r-md);overflow:hidden}
+th{background:var(--surface-2);text-align:left;font-size:var(--fs-sm)} th,td{padding:var(--sp-3) var(--sp-4);border-bottom:1px solid var(--border)}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.empty{text-align:center;color:var(--text-muted);border:1.5px dashed var(--border-strong);border-radius:var(--r-lg);padding:var(--sp-6)}
+.empty svg{width:40px;height:40px;color:var(--primary)}
+.bars{display:flex;gap:6px;align-items:flex-end;height:80px;border-bottom:1px solid var(--chart-grid)}
+.bars i{flex:1;border-radius:4px 4px 0 0}
+.map{height:120px;border-radius:var(--r-md);position:relative;overflow:hidden;background:#d9e3c8}
+.map .tiles{position:absolute;inset:0;background:repeating-linear-gradient(45deg,#cfdcb7 0 14px,#e6edd8 14px 28px)}
+.pin{position:absolute;width:16px;height:16px;border-radius:50%;background:var(--map-pin);border:3px solid var(--map-pin-ring);box-shadow:var(--shadow-2)}
+</style></head><body>
+<div class="bar"><h1>fieldwork.</h1>
+<div class="seg" role="group" aria-label="Theme">
+<button data-p="light">Light</button><button data-p="dark">Dark</button><button data-p="system">System</button></div></div>
+<div class="grid">
+<div class="card"><small>Income</small><div class="kpi pos">KSh 412,000</div></div>
+<div class="card"><small>Expenses</small><div class="kpi">KSh 468,500</div></div>
+<div class="card"><small>Net cash flow</small><div class="kpi neg">−KSh 56,500</div></div>
+<div class="card"><small>Open tasks</small><div class="kpi">14</div></div></div>
+<div class="grid">
+<div class="card"><p><span class="badge ok">Done</span><span class="badge warn">Due soon</span><span class="badge bad">Overdue</span><span class="badge info">Info</span><span class="badge mute">Draft</span></p>
+<p><input placeholder="Search records"> <button class="btn">Add a record</button></p></div>
+<div class="card"><div class="bars"><i style="height:40%;background:var(--chart-1)"></i><i style="height:70%;background:var(--chart-2)"></i><i style="height:55%;background:var(--chart-3)"></i><i style="height:85%;background:var(--chart-4)"></i><i style="height:30%;background:var(--chart-5)"></i></div></div>
+<div class="card"><div class="map"><div class="tiles map-tiles"></div><span class="pin" style="left:30%;top:40%"></span><span class="pin" style="left:62%;top:58%"></span></div></div></div>
+<table><tr><th>Date</th><th>Description</th><th style="text-align:right">Amount</th></tr>
+<tr><td>12 Nov</td><td>Dairy meal, 20 bags</td><td class="n neg">−18,400</td></tr>
+<tr><td>14 Nov</td><td>Milk delivery</td><td class="n pos">+62,300</td></tr></table>
+<p></p><div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 21v-9M12 12c0-4 3-6 7-6 0 4-3 6-7 6zM12 14c0-3-2-5-6-5 0 3 2 5 6 5z"/></svg>
+<p><b>No vendors yet</b><br>Add your first vendor or pick one from the KEPHIS seed merchant list.</p></div>
+<script type="module">
+import { setPref, getPref } from '../js/theme.js';
+const btns=[...document.querySelectorAll('.seg button')];
+const sync=()=>btns.forEach(b=>b.setAttribute('aria-pressed',b.dataset.p===getPref()));
+btns.forEach(b=>b.onclick=()=>{setPref(b.dataset.p);sync()});sync();
+</script></body></html>
