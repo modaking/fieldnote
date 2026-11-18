@@ -1,6 +1,7 @@
 // Config-driven list + form for one table. Used by every module so each stays ~20 lines.
 import * as C from './components.js';
 import { registerUnsaved, confirmLeave } from './feedback.js';
+import { readAll, readForList } from './read-all.js';
 const digits = (cur) => new Intl.NumberFormat('en', { style: 'currency', currency: cur }).resolvedOptions().maximumFractionDigits;
 
 // Keep the schema's ISO minor units exact; never silently round money on entry.
@@ -48,11 +49,12 @@ export async function resource(el, X, cfg) {
   if (X.permissions?.canReadModule && !X.permissions.canReadModule(moduleKey)) { el.innerHTML = C.emptyState({ title: 'This section is unavailable for your role', text: 'Ask a workspace admin if you need access.', icon: I(cfg.icon) }); return; }
   const workspace = S.ws.id, scope = `workspace_id=eq.${workspace}`, base = S.ws.currency, scale = (c) => 10 ** (digits(base) - digits(c)), fix = (x) => Number(x.toPrecision(12)), canAdd = moduleWrite(), canDel = moduleWrite() && (X.permissions?.canDeleteModule ? X.permissions.canDeleteModule(moduleKey) : X.canWrite());
   const actor = X.uid?.();
+  const readActive=()=>S.ws?.id===workspace&&(!actor||X.uid?.()===actor)&&el.isConnected!==false;
   const permitted = () => S.ws?.id === workspace && (!actor || X.uid?.() === actor) && moduleWrite();
   const canCreate = canAdd && cfg.canCreate !== false && !(cfg.table === 'farms' && S.farmIds != null), canDuplicate = canCreate && cfg.canDuplicate !== false;
   const refs = { farms: S.farms.map((f) => [f.id, f.name]) }, referenceRows = {};
   for (const r of cfg.refs || []) {
-    referenceRows[r] = await db.select(r, `${scope}&select=${r === 'categories' ? 'id,name,kind' : r === 'enterprises' ? 'id,name,farm_id' : 'id,name'}&order=name`);
+    referenceRows[r] = await readAll(db,r,`${scope}&select=${r === 'categories' ? 'id,name,kind' : r === 'enterprises' ? 'id,name,farm_id' : 'id,name'}&order=name`,{active:readActive});
     if (r === 'enterprises' && S.farmId !== 'all') referenceRows[r] = referenceRows[r].filter((e) => e.farm_id === S.farmId);
     refs[r] = referenceRows[r].map((x) => [x.id, r === 'categories' ? `${x.name} (${x.kind})` : x.name]);
   }
@@ -60,15 +62,17 @@ export async function resource(el, X, cfg) {
   const incoming=X.filters||{},uuid=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
   const initialFilters=Object.fromEntries((cfg.filters||[]).filter(f=>incoming[f.k]&&(f.ref?(refs[f.ref]||[]).some(([id])=>id===incoming[f.k]):f.options?.includes(incoming[f.k]))).map(f=>[f.k,incoming[f.k]]));
   let serverFilters={...(uuid(incoming.id)?{id:incoming.id}:{}),...(cfg.table==='transactions'&&uuid(incoming.enterprise_id)&&X.migrationReady?{enterprise_id:incoming.enterprise_id}:{}),
-    ...(cfg.table==='transactions'&&['recurring','worker_pay'].includes(incoming.source_type)?{source_type:incoming.source_type}:{}),...(cfg.table==='tasks'&&incoming.completed_on&&!fieldError({label:'Completion date',type:'date'},incoming.completed_on,base)?{completed_on:incoming.completed_on}:{})};
-  let rows = [], q = String(incoming.q||'').trim().toLowerCase(), flt = initialFilters, loaded = false, loadSeq = 0, page = 1, pageSize = 25, sort = { key: '', direction: 'asc' }, confirmingDelete = false;
+    ...(cfg.table==='transactions'&&['recurring','worker_pay','project'].includes(incoming.source_type)?{source_type:incoming.source_type}:{}),...(cfg.table==='transactions'&&uuid(incoming.source_id)?{source_id:incoming.source_id}:{}),...(cfg.table==='tasks'&&incoming.completed_on&&!fieldError({label:'Completion date',type:'date'},incoming.completed_on,base)?{completed_on:incoming.completed_on}:{})};
+  let rows = [],rowsComplete=true,q = String(incoming.q||'').trim().toLowerCase(), flt = initialFilters, loaded = false, loadSeq = 0, page = 1, pageSize = 25, sort = { key: '', direction: 'asc' }, confirmingDelete = false;
   const selected = new Set(), hiddenColumns = new Set(), pendingDeletes = new Map(), pendingQuick = new Set();
+  const summaryCache=new Map();let summaryKey='',summaryStatus='idle',summarySequence=0;
+  const invalidateSummary=()=>{summaryCache.clear();summaryKey='';summaryStatus='idle';summarySequence++;};
   const lbl = (rk, id) => (refs[rk] || []).find((r) => r[0] === id)?.[1] || '';
 
   async function fetchRows() {
     if (cfg.load) {
       const result = await cfg.load(X);
-      return result.filter((row) => (cfg.farmScoped === false || S.farmId === 'all' || row.farm_id === S.farmId || (cfg.farmOrNull && !row.farm_id))&&Object.entries(serverFilters).every(([key,value])=>key==='completed_on'?new Date(row.done_at).toLocaleDateString('en-CA',{timeZone:'Africa/Nairobi'})===value:row[key]===value));
+      return{complete:true,rows:result.filter((row) => (cfg.farmScoped === false || S.farmId === 'all' || row.farm_id === S.farmId || (cfg.farmOrNull && !row.farm_id))&&Object.entries(serverFilters).every(([key,value])=>key==='completed_on'?new Date(row.done_at).toLocaleDateString('en-CA',{timeZone:'Africa/Nairobi'})===value:row[key]===value))};
     }
     let qs = `${scope}&select=*&order=${cfg.order || 'created_at.desc'}`;
     for(const [key,value] of Object.entries(serverFilters)){
@@ -78,15 +82,10 @@ export async function resource(el, X, cfg) {
     if (cfg.farmScoped !== false && S.farmId !== 'all') qs += cfg.farmOrNull ? `&or=(farm_id.eq.${S.farmId},farm_id.is.null)` : `&farm_id=eq.${S.farmId}`;
     if (cfg.monthField) { const [a, b] = monthRange(); qs += `&${cfg.monthField}=gte.${a}&${cfg.monthField}=lt.${b}`; }
     if (cfg.table === 'enterprise_records' && S.farmId !== 'all') {
-      if (!refs.enterprises.length) return [];
+      if (!refs.enterprises.length) return{rows:[],complete:true};
       qs += `&enterprise_id=in.(${refs.enterprises.map(([id]) => id).join(',')})`;
     }
-    const result = [];
-    for (let offset = 0; offset < 10000; offset += 1000) {
-      const batch = await db.select(cfg.table, `${qs}&limit=1000&offset=${offset}`); result.push(...batch);
-      if (batch.length < 1000) break;
-    }
-    return result;
+    return readForList(db,cfg.table,qs,{active:readActive});
   }
   const cellValue = (c, r) => {
     const v = r[c.k];
@@ -108,6 +107,7 @@ export async function resource(el, X, cfg) {
 
   function paint() {
     const list = visible(), pages = Math.max(1, Math.ceil(list.length / pageSize)); page = Math.min(page, pages);
+    csvControl.textContent=rowsComplete?'Export CSV':'Export loaded CSV (partial)';
     const slice = list.slice((page - 1) * pageSize, page * pageSize);
     $t.innerHTML = list.length ? C.dataTable({ caption: cfg.title, rows: slice, selectable: canAdd, selected, sort,
       columns: cfg.cols.filter((c) => !hiddenColumns.has(c.k)).map((c) => ({ key: c.k, label: c.label, numeric: c.t === 'money' || c.t === 'number', sortable: true, render: (row) => cellValue(c, row) })),
@@ -115,14 +115,32 @@ export async function resource(el, X, cfg) {
         { label: 'View details', attrs: { 'data-v': row.id } }, ...(canAdd ? [{ label: 'Edit', attrs: { 'data-e': row.id,disabled:pendingQuick.has(row.id) } }] : []), ...(canDuplicate ? [{ label: 'Duplicate', attrs: { 'data-copy': row.id,disabled:pendingQuick.has(row.id) } }] : []), ...(canDel ? [{ label: 'Delete', variant: 'danger', attrs: { 'data-d': row.id,disabled:pendingQuick.has(row.id) } }] : []),
       ] })}</div>` })
       : C.emptyState({ icon: I(cfg.icon), title: rows.length ? 'No matching records' : cfg.emptyTitle, text: rows.length ? 'Try another search or remove a filter.' : cfg.emptyText, action: rows.length ? C.button({ label: 'Clear filters', variant: 'secondary', attrs: { 'data-clear-filters': true } }) : canCreate ? C.button({ label: `Add ${cfg.singular}`, attrs: { 'data-add-record': true } }) : '' });
-    $s.innerHTML = cfg.summary ? cfg.summary(list, X) : '';
+    paintSummary(list);
     const checked = $t.querySelector('[data-select-page]'); if (checked) { checked.checked = slice.length > 0 && slice.every((row) => selected.has(row.id)); checked.indeterminate = !checked.checked && slice.some((row) => selected.has(row.id)); }
-    $('#pagination').innerHTML = `<span class="ui-result-count" aria-live="polite">${list.length ? `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, list.length)}` : '0'} of ${list.length} records${rows.length >= 10000 ? ' · First 10,000 loaded; narrow the farm or month for more.' : ''}</span><div class="btns">${C.select({ value: String(pageSize), options: ['25', '50', '100'], attrs: { 'data-page-size': true, 'aria-label': 'Records per page' } })}${C.button({ label: 'Previous', size: 'sm', variant: 'ghost', attrs: { 'data-page': page - 1, 'data-page-direction': 'previous', disabled: page <= 1 } })}<span>Page ${page} of ${pages}</span>${C.button({ label: 'Next', size: 'sm', variant: 'ghost', attrs: { 'data-page': page + 1, 'data-page-direction': 'next', disabled: page >= pages } })}</div>`;
+    $('#pagination').innerHTML = `<span class="ui-result-count" aria-live="polite">${list.length ? `${(page - 1) * pageSize + 1}–${Math.min(page * pageSize, list.length)}` : '0'} of ${list.length} records${!rowsComplete ? ' · First 10,000 loaded; narrow the farm or month for more.' : ''}</span><div class="btns">${C.select({ value: String(pageSize), options: ['25', '50', '100'], attrs: { 'data-page-size': true, 'aria-label': 'Records per page' } })}${C.button({ label: 'Previous', size: 'sm', variant: 'ghost', attrs: { 'data-page': page - 1, 'data-page-direction': 'previous', disabled: page <= 1 } })}<span>Page ${page} of ${pages}</span>${C.button({ label: 'Next', size: 'sm', variant: 'ghost', attrs: { 'data-page': page + 1, 'data-page-direction': 'next', disabled: page >= pages } })}</div>`;
     $('#bulkbar').hidden = !selected.size;
     $('#bulkbar').innerHTML = `<strong>${selected.size} selected</strong><div class="btns">${C.button({ label: 'Export selected', size: 'sm', variant: 'secondary', attrs: { 'data-bulk-export': true } })}${canDel ? C.button({ label: 'Delete selected', size: 'sm', variant: 'danger', attrs: { 'data-bulk-delete': true } }) : ''}${C.button({ label: 'Clear selection', size: 'sm', variant: 'ghost', attrs: { 'data-clear-selection': true } })}</div>`;
-    $('#chips').innerHTML = [...(q ? [{ key: '__search', label: `Search: ${q}` }] : []), ...Object.entries(flt).filter(([, value]) => value).map(([key, value]) => ({ key, label: `${cfg.filters.find((f) => f.k === key)?.label || key}: ${lbl(cfg.filters.find((f) => f.k === key)?.ref, value) || value}` })),...Object.entries(serverFilters).map(([key,value])=>({key:`__server_${key}`,label:`${({id:'Selected record',enterprise_id:'Enterprise',source_type:'Source',completed_on:'Completed on'})[key]}: ${key==='id'?'From dashboard':key==='enterprise_id'?lbl('enterprises',value)||'Selected enterprise':key==='source_type'?value==='worker_pay'?'Worker pay':'Recurring payment':value}`}))]
+    $('#chips').innerHTML = [...(q ? [{ key: '__search', label: `Search: ${q}` }] : []), ...Object.entries(flt).filter(([, value]) => value).map(([key, value]) => ({ key, label: `${cfg.filters.find((f) => f.k === key)?.label || key}: ${lbl(cfg.filters.find((f) => f.k === key)?.ref, value) || value}` })),...Object.entries(serverFilters).map(([key,value])=>({key:`__server_${key}`,label:`${({id:'Selected record',enterprise_id:'Enterprise',source_type:'Source',source_id:'Selected source',completed_on:'Completed on'})[key]}: ${['id','source_id'].includes(key)?'From dashboard':key==='enterprise_id'?lbl('enterprises',value)||'Selected enterprise':key==='source_type'?({worker_pay:'Worker pay',recurring:'Recurring payment',project:'Project'})[value]:value}`}))]
       .map((chip) => `<span class="ui-chip">${esc(chip.label)}<button type="button" data-remove-filter="${esc(chip.key)}" aria-label="Remove ${esc(chip.label)}">×</button></span>`).join('');
     bindRowMenus();
+  }
+
+  function paintSummary(list){
+    if(!cfg.summary){$s.innerHTML='';return;}
+    if(!cfg.summaryRpc||!X.migrationReady){$s.innerHTML=rowsComplete?cfg.summary(list,X):C.notice({title:'Totals unavailable for this list',text:'Only the first 10,000 records are loaded. Narrow the farm or period to show complete totals.',tone:'warning'});return;}
+    const allowed=new Set(['kind','category_id','vendor_id','enterprise_id','source_type','source_id','id','q']),filters=Object.fromEntries(Object.entries({...flt,...serverFilters,...(q?{q}:{})}).filter(([key,value])=>allowed.has(key)&&value!==''&&value!==undefined).sort(([a],[b])=>a.localeCompare(b)));
+    const [from,to]=monthRange(),args={p_workspace_id:workspace,p_from:from,p_to:to,p_farm_id:S.farmId==='all'?null:S.farmId,p_filters:filters},key=JSON.stringify(args);
+    const render=data=>{$s.innerHTML=`<span>Income <b class="pos">${money(data.income)}</b></span><span>Expenses <b>${money(data.expenses)}</b></span><span>Net <b class="${data.net<0?'neg':'pos'}">${money(data.net)}</b></span><span>${data.count} matching records</span>${!rowsComplete?C.notice({text:'Totals cover all matching records. The table shows only the first 10,000.',tone:'info'}):''}`;};
+    if(summaryCache.has(key)){summaryKey=key;summaryStatus='ready';render(summaryCache.get(key));return;}
+    if(summaryKey===key&&summaryStatus==='loading')return;
+    summaryKey=key;summaryStatus='loading';const ticket=++summarySequence;
+    $s.innerHTML=C.notice({title:'Loading totals',text:'Getting the complete totals for these filters.'});
+    void(async()=>{try{
+      const data=await db.rpc(cfg.summaryRpc,args);
+      if(ticket!==summarySequence||summaryKey!==key||!readActive())return;
+      if(data?.schema_version!=='20261118-finance'||!['income','expenses','net','count'].every(name=>Number.isSafeInteger(data[name]))||data.count<0)throw new Error('Complete database totals are unavailable.');
+      summaryCache.set(key,data);summaryStatus='ready';render(data);
+    }catch(error){if(ticket!==summarySequence||summaryKey!==key||!readActive())return;summaryStatus='error';$s.innerHTML=C.notice({title:'Totals unavailable',text:error.message,tone:'warning',action:C.button({label:'Try again',variant:'secondary',attrs:{'data-summary-retry':true}})});}})();
   }
 
   function form(row, mode = row ? 'edit' : 'create') {
@@ -256,6 +274,7 @@ export async function resource(el, X, cfg) {
         finally { pendingDeletes.delete(row.id); }
       }
       if(!permitted()){ids.forEach(id=>pendingDeletes.delete(id));notification.dismiss();return;}
+      if(removed)invalidateSummary();
       if (removed) { try { await cfg.afterChange?.({ action: 'delete', ids }); } catch (error) { failures.push(error.message); } }
       if(!permitted()){notification.dismiss();return;}
       notification.dismiss(); paint();
@@ -263,21 +282,21 @@ export async function resource(el, X, cfg) {
     }, 6000);
   }
   async function reload() {
-    const my = ++loadSeq; $t.setAttribute('aria-busy', 'true'); if (!loaded) $t.innerHTML = C.skeletonRows({ columns: Math.min(cfg.cols.length, 5) });
-    try { const result = await fetchRows(); if (my !== loadSeq) return; rows = cfg.normaliseRows ? cfg.normaliseRows(result, X) : result; loaded = true; paint(); }
-    catch (e) { if (my !== loadSeq) return; $t.innerHTML = C.emptyState({ title: `Couldn’t load ${cfg.title.toLowerCase()}`, text: e.message, icon: I(cfg.icon), action: C.button({ label: 'Try again', variant: 'secondary', attrs: { id: 'retry' } }) }); $('#retry')?.addEventListener('click', reload); }
+    const my = ++loadSeq;invalidateSummary();if(cfg.summary)$s.innerHTML=C.notice({title:'Loading totals',text:'Loading the matching records.'}); $t.setAttribute('aria-busy', 'true'); if (!loaded) $t.innerHTML = C.skeletonRows({ columns: Math.min(cfg.cols.length, 5) });
+    try { const result = await fetchRows(); if (my !== loadSeq) return;rowsComplete=result.complete; rows = cfg.normaliseRows ? cfg.normaliseRows(result.rows, X) : result.rows; loaded = true; paint(); }
+    catch (e) { if (my !== loadSeq) return;if(cfg.summary)$s.innerHTML=C.notice({title:'Totals unavailable',text:'Records could not be loaded completely.',tone:'warning'}); $t.innerHTML = C.emptyState({ title: `Couldn’t load ${cfg.title.toLowerCase()}`, text: e.message, icon: I(cfg.icon), action: C.button({ label: 'Try again', variant: 'secondary', attrs: { id: 'retry' } }) }); $('#retry')?.addEventListener('click', reload); }
     finally { if (my === loadSeq) $t.setAttribute('aria-busy', 'false'); }
   }
   function csv(selectedOnly = false) {
     const L = visible().filter((row) => !selectedOnly || selected.has(row.id)), columns = cfg.cols.filter((c) => !hiddenColumns.has(c.k)), val = (c, r) => (c.exportValue ? c.exportValue(r, X) : c.t === 'money' ? r[c.k]==null?'':r[c.k] / 10 ** digits(r.currency || base) : c.t && c.t !== 'badge' ? lbl(c.t, r[c.k]) : r[c.k] ?? '');
     const t = [columns.map((c) => c.label), ...L.map((r) => columns.map((c) => val(c, r)))].map((a) => a.map(C.csvCell).join(',')).join('\n');
-    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + t], { type: 'text/csv' })); a.download = `${cfg.table}-${S.month}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob(['\ufeff' + t], { type: 'text/csv' })); a.download = `${cfg.table}-${S.month}${!rowsComplete&&!selectedOnly?'-loaded-partial':''}.csv`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);if(!rowsComplete&&!selectedOnly)toast('CSV contains only loaded records. Use a statement for the complete selection.');
   }
 
   const reportKey = cfg.report || moduleKey, canReport = typeof X.report === 'function' && (!X.canReport || X.canReport(reportKey));
   const moreItems=[...(canReport?[{label:'Report',attrs:{id:'module-report'}}]:[]),{label:'Export CSV',attrs:{id:'csv'}},{label:'Choose columns',attrs:{id:'columns-open'}},...(cfg.moreActions||[])];
   el.innerHTML = C.pageHeader({ title: cfg.title, eyebrow: 'Farm records', description: cfg.description || cfg.emptyText || '', actions: C.actionMenu({label:'More actions',text:'More actions',items:moreItems})+(canCreate?C.button({label:`Add ${cfg.singular}`,icon:I('plus'),attrs:{id:'add'}}):'') }) + (S.farmIds != null && cfg.table === 'categories' ? C.notice({ text: 'Categories are shared across all farms. A workspace administrator manages changes to this list.' }) : '') + `<div class="sumbar" id="sum"></div><section class="ui-resource-card" aria-label="${esc(cfg.title)}"><div class="ui-resource-toolbar">${C.input({ id: 'q', type: 'search', attrs: { placeholder: `Search ${cfg.title.toLowerCase()}`, 'aria-label': `Search ${cfg.title.toLowerCase()}` } })}${cfg.filters?.length?C.button({label:'Filters',variant:'secondary',attrs:{id:'filters-open'}}):''}</div><div class="ui-filter-chips" id="chips"></div><div class="ui-bulkbar" id="bulkbar" hidden></div><div class="ui-table-scroller" id="tbl"></div><footer class="ui-pagination" id="pagination"></footer></section>`;
-  const $t = $('#tbl'), $s = $('#sum');
+  const $t = $('#tbl'), $s = $('#sum'),csvControl=$('#csv');
   $('#q').value=q;
   const resetView = () => { page = 1; selected.clear(); paint(); };
   $('#q').oninput = (e) => { q = e.target.value.trim().toLowerCase(); resetView(); };
@@ -300,6 +319,7 @@ export async function resource(el, X, cfg) {
     const control = event.target.closest('button'); if (!control || control.disabled) return;
     if (control.dataset.page) { page = Number(control.dataset.page); paint(); if (control.dataset.pageDirection) $('#pagination').querySelector(`[data-page-direction="${control.dataset.pageDirection}"]`)?.focus(); }
     if (control.hasAttribute('data-clear-filters')) clearFilters();
+    if(control.hasAttribute('data-summary-retry')){invalidateSummary();paint();}
     if (control.hasAttribute('data-add-record')) form();
     if (control.hasAttribute('data-bulk-export')) csv(true);
     if (control.hasAttribute('data-clear-selection')) { selected.clear(); paint(); }

@@ -7,20 +7,21 @@ import * as components from '../js/components.js';
 import * as permissions from '../js/permissions.js';
 import { createReport } from '../js/reports.js';
 import * as invites from '../js/invites.js';
-import * as feedback from '../js/feedback.js';
 import * as navigation from '../js/navigation.js';
+import * as pagination from '../js/read-all.js';
 
 const source = await readFile(new URL('../js/app.js', import.meta.url), 'utf8');
 const memberSource = await readFile(new URL('../js/members.js', import.meta.url), 'utf8');
+const feedbackSource = await readFile(new URL('../js/feedback.js', import.meta.url), 'utf8');
 const routeNames = ['daily', 'finances', 'vendors', 'infrastructure', 'livestock', 'workers', 'funding'];
 const settle = async () => { await new Promise(setImmediate); };
 
 async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) {
-  feedback.clearUnsavedChanges();
   const nodes = new Map();
   const requests = [];
   const calls = [];
   const messages = [];
+  const confirmations = [], confirmationAnswers = [];
   const storage = new Map([['fw-month', '2026-11']]);
   const events = new Map();
   let currentSession = { user: { id: 'user-1', email: 'farmer@example.test' } };
@@ -101,16 +102,18 @@ async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) 
     ['./theme.js', { getPref: () => 'light', setPref() {} }],
     ['./modules.js', views],
     ['./seed.js', { loadDemo() {} }],
-    ['./components.js', { ...components, toast: (message) => messages.push(message) }],
+    ['./components.js', { ...components, toast: (message) => messages.push(message), confirmDialog: async options => {
+      confirmations.push(options); return confirmationAnswers.shift() ?? false;
+    } }],
     ['./permissions.js', permissions],
     ['./crud.js', { resource: async (el,X,cfg) => { calls.push({name:'resource',X,cfg,el}); el.innerHTML='Resource ready'; } }],
     ['./reports.js', { renderReports: async (el,X,{module}) => { calls.push({name:'reports',X,module,el}); await createReport(X,{module}); el.innerHTML=`${module} report ready`; } }],
     ['./members.js', { members: async (el,X,options) => { if(!X.migrationReady)return contextualMembers(el,X,options);calls.push({name:'members',X,el,options}); el.innerHTML='Members ready'; } }],
     ['./invites.js', invites],
-    ['./feedback.js', feedback],
     ['./dashboard.js', { dashboard:async(el,X)=>{calls.push({name:'dashboard',X,el});el.innerHTML='Dashboard ready';} }],
     ['./account.js', { account:async()=>{},requireMfa:async()=>false }],
     ['./navigation.js',navigation],
+    ['./read-all.js',pagination],
     ['./navigation-ui.js',{renderSectionPage:async(el,X,nav,leafViews,members)=>{
       const section=navigation.SECTIONS.find(item=>item.id===nav.section);assert.ok(section,`Unknown section ${nav.section}`);
       const local={...X,section:section.id,pageTitle:section.label};
@@ -121,7 +124,7 @@ async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) 
   ]);
   const context = vm.createContext({
     document, location, history, console, URLSearchParams, Event, crypto: webcrypto,
-    FormData: class { constructor(form) { this.values = Object.entries(form.values || {}); } [Symbol.iterator]() { return this.values[Symbol.iterator](); } },
+    FormData: class { constructor(form) { this.values = Object.entries(form.values || {}); } get(name) { return this.values.find(([key]) => key === name)?.[1] ?? null; } [Symbol.iterator]() { return this.values[Symbol.iterator](); } },
     localStorage: {
       getItem: (key) => storage.get(key) ?? null,
       setItem: (key, value) => storage.set(key, String(value)),
@@ -130,6 +133,7 @@ async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) 
     sessionStorage: {getItem:()=>null,setItem(){},removeItem(){}},
     matchMedia: () => ({ matches: true, addEventListener() {} }),
     setTimeout: () => 0,
+    MutationObserver: class { observe() {} disconnect() {} },
     window: browserWindow,
   });
   // Expose private entry points only inside this isolated test module. The real
@@ -146,9 +150,14 @@ async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) 
   };
   // The real readiness gate must share this VM's location and browser state;
   // importing that function in the Node host would read the host's globals.
+  // Keep the real registry/guard isolated too; only the user's confirmation
+  // response is supplied by the test instead of opening a second DOM dialog.
+  const feedbackModule = new vm.SourceTextModule(feedbackSource,{context,identifier:'feedback.js'});
+  await feedbackModule.link(dependency);await feedbackModule.evaluate();
+  dependencies.set('./feedback.js',feedbackModule.namespace);
   const memberModule=new vm.SourceTextModule(memberSource,{context,identifier:'members.js'});
   await memberModule.link(dependency);await memberModule.evaluate();contextualMembers=memberModule.namespace.members;
-  const module = new vm.SourceTextModule(`${source}\nexport { S, route, renderView, renderShell, openAddRecord, openFarm };`, { context, identifier: 'app.js',importModuleDynamically:async specifier=>{const linked=dependency(specifier);if(linked.status==='unlinked')await linked.link(()=>{});if(linked.status==='linked')await linked.evaluate();return linked;} });
+  const module = new vm.SourceTextModule(`${source}\nexport { S, load, route, renderView, renderShell, openAddRecord, openFarm };`, { context, identifier: 'app.js',importModuleDynamically:async specifier=>{const linked=dependency(specifier);if(linked.status==='unlinked')await linked.link(()=>{});if(linked.status==='linked')await linked.evaluate();return linked;} });
   await module.link(dependency);
   await module.evaluate();
   Object.assign(module.namespace.S, {
@@ -157,7 +166,7 @@ async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) 
     farms: [{ id: 'farm-a', name: 'First farm' }, { id: 'farm-b', name: 'Second farm' }],
     farmId: 'all', month: '2026-11', route: 'overview',page:'overview',section:null,
   });
-  return { api: module.namespace, document, location, history, requests, calls, messages, get, links, storage, Element, events, db,
+  return { api: module.namespace, feedback: feedbackModule.namespace, confirmations, answerConfirmation: answer => confirmationAnswers.push(answer), document, location, history, requests, calls, messages, get, links, storage, Element, events, db,
     setSession: (next) => { currentSession = next; }, replaceNode: (selector, element) => nodes.set(selector, element) };
 }
 
@@ -331,10 +340,10 @@ test('clearing account storage immediately removes workspace data and privileges
 test('switching account storage clears old permissions before the new context finishes loading', async () => {
   const h = await harness(); let release;
   const waiting = new Promise((resolve) => { release = resolve; });
-  h.db.select = async (table) => {
+  h.db.select = async (table,query='') => {
     if (table === 'profiles') { await waiting; return [{ id: 'user-2', full_name: 'Next farmer', active_workspace: 'workspace-next' }]; }
     if (table === 'workspace_members') return [{ role: 'viewer', workspaces: { id: 'workspace-next', name: 'Next workspace', currency: 'KES' } }];
-    if (table === 'farms') return [{ id: 'next-farm', name: 'Next farm' }];
+    if (table === 'farms') return new URLSearchParams(query).get('offset')==='0'?[{ id: 'next-farm', name: 'Next farm' }]:[];
     return [];
   };
   h.db.rpc = async () => ({ schema_version: '20261118', role: 'viewer', farm_scope: 'all', farm_ids: [] });
@@ -381,8 +390,101 @@ test('five-page navigation keeps global keyboard search and the mobile More entr
 });
 test('closing Quick add preserves inline Profile dirty and saving registrations',async()=>{
   const h=await harness();h.api.renderShell();await settle();let dirty=true,saving=false;
-  feedback.registerUnsaved({element:{isConnected:true},isDirty:()=>dirty,isSaving:()=>saving});
-  await h.get('#global-add').click();assert.match(h.get('#dlg').innerHTML,/Add a record/);assert.equal(feedback.hasUnsavedChanges(),true);
-  h.get('[data-drawer-close]').click();dirty=false;assert.equal(feedback.hasUnsavedChanges(),false);dirty=true;assert.equal(feedback.hasUnsavedChanges(),true);
-  dirty=false;saving=true;assert.equal(feedback.hasUnsavedChanges(),true,'opening and dismissing a chooser must not unregister a later pending save');feedback.clearUnsavedChanges();
+  h.feedback.registerUnsaved({element:{isConnected:true},isDirty:()=>dirty,isSaving:()=>saving});
+  await h.get('#global-add').click();assert.match(h.get('#dlg').innerHTML,/Add a record/);assert.equal(h.feedback.hasUnsavedChanges(),true);
+  h.get('[data-drawer-close]').click();dirty=false;assert.equal(h.feedback.hasUnsavedChanges(),false);dirty=true;assert.equal(h.feedback.hasUnsavedChanges(),true);
+  dirty=false;saving=true;assert.equal(h.feedback.hasUnsavedChanges(),true,'opening and dismissing a chooser must not unregister a later pending save');
+});
+
+test('cancelling Filters preserves later inline budget edits and their navigation prompt',async()=>{
+  const h=await harness();h.location.hash='#/finances?section=budgets';await h.api.route();await settle();
+  let dirty=true;
+  h.feedback.registerUnsaved({element:h.get('#view'),isDirty:()=>dirty});
+  await h.get('#top-filters').click();
+  assert.match(h.get('#dlg').innerHTML,/Farm and period/);
+  assert.equal(h.confirmations.length,0,'Opening a temporary filter sheet must not discard inline changes.');
+  h.get('[data-drawer-close]').click();assert.equal(h.get('#dlg').open,false);
+  dirty=false;assert.equal(h.feedback.hasUnsavedChanges(),false);
+  dirty=true;h.location.hash='#/operations?section=tasks';await h.api.route();await settle();
+  assert.equal(h.confirmations.length,1,'Editing the same inline budget after closing Filters must still prompt.');
+  assert.equal(h.api.S.section,'budgets');assert.match(h.location.hash,/section=budgets/);
+  assert.equal(h.feedback.hasUnsavedChanges(),true);
+});
+
+test('Filters cannot replace an existing drawer with unsaved or saving changes',async()=>{
+  const h=await harness();await h.api.route();await settle();
+  const dialog=h.get('#dlg');components.openDrawer(dialog,{title:'Edit record',body:'<form>Existing record</form>'});
+  const existing=dialog.innerHTML;let saving=false;
+  h.feedback.registerUnsaved({element:dialog,isDirty:()=>true,isSaving:()=>saving,isActive:()=>dialog.open});
+  await h.get('#top-filters').click();
+  assert.equal(h.confirmations.length,1);assert.equal(dialog.innerHTML,existing);assert.equal(dialog.open,true);
+  saving=true;await h.get('#top-filters').click();
+  assert.equal(h.confirmations.length,1,'An active save must block replacement before requesting discard.');
+  assert.equal(dialog.innerHTML,existing);assert.match(h.messages.at(-1),/finish saving/);
+});
+
+test('applying Filters asks before discarding an inline budget and changes scope only after confirmation',async()=>{
+  const h=await harness();h.location.hash='#/finances?section=budgets';await h.api.route();await settle();
+  h.feedback.registerUnsaved({element:h.get('#view'),isDirty:()=>true});
+  await h.get('#top-filters').click();const form=h.get('#top-filter-form');form.values={farm:'farm-b',month:'2026-10'};
+  await form.onsubmit({preventDefault(){},target:form});
+  assert.equal(h.confirmations.length,1);assert.equal(h.api.S.farmId,'all');assert.equal(h.api.S.month,'2026-11');
+  assert.equal(h.feedback.hasUnsavedChanges(),true);
+  await h.get('#top-filters').click();h.answerConfirmation(true);
+  await h.get('#top-filter-form').onsubmit({preventDefault(){},target:form});await settle();
+  assert.equal(h.confirmations.length,2);assert.equal(h.api.S.farmId,'farm-b');assert.equal(h.api.S.month,'2026-10');
+  assert.equal(h.feedback.hasUnsavedChanges(),false);assert.equal(h.api.S.section,'budgets');
+});
+
+test('loading a workspace retains all 1,001 permitted farms and the database role context',async()=>{
+  const h=await harness(),farms=Array.from({length:1001},(_,index)=>({id:`farm-${index}`,name:`Farm ${index}`,created_at:'2026-11-01T00:00:00Z'})),queries=[];
+  h.storage.set('fw-farm:user-1:workspace-a','farm-1000');
+  h.db.select=async(table,query='')=>{
+    if(table==='profiles')return[{id:'user-1',active_workspace:'workspace-a'}];
+    if(table==='workspace_members')return[{role:'owner',workspaces:{id:'workspace-a',name:'Test workspace',currency:'KES'}}];
+    if(table==='farms'){const params=new URLSearchParams(query);queries.push(params);return farms.slice(Number(params.get('offset')||0),Number(params.get('offset')||0)+1000);}
+    return[];
+  };
+  h.db.rpc=async()=>({schema_version:'20261118',role:'viewer',farm_scope:'farms',farm_ids:farms.map(farm=>farm.id)});
+  await h.api.load();await settle();
+  assert.equal(h.api.S.farms.length,1001);assert.equal(h.api.S.farmId,'farm-1000');
+  assert.equal(h.api.S.role,'viewer');assert.equal(h.api.S.accessReady,true);assert.equal(h.api.S.farmIds.length,1001);
+  assert.deepEqual(queries.map(params=>params.get('offset')),['0','1000','1001']);
+  assert.ok(queries.every(params=>params.get('workspace_id')==='eq.workspace-a'&&params.get('order')==='created_at.asc,id.asc'));
+});
+
+test('an account change during farm pagination cannot commit the previous workspace context',async()=>{
+  const h=await harness();let release;
+  const waiting=new Promise(resolve=>{release=resolve;});
+  h.db.select=async(table)=>{
+    if(table==='profiles')return[{id:'user-1',active_workspace:'workspace-old'}];
+    if(table==='workspace_members')return[{role:'owner',workspaces:{id:'workspace-old',name:'Old workspace',currency:'KES'}}];
+    if(table==='farms'){await waiting;return[{id:'old-farm',name:'Old farm'}];}
+    return[];
+  };
+  const pending=h.api.load();await settle();
+  h.setSession({user:{id:'user-2'}});Object.assign(h.api.S,{userId:'user-2',ws:{id:'workspace-next',currency:'KES'},farms:[{id:'next-farm'}],role:'worker'});
+  release();await pending;
+  assert.equal(h.api.S.userId,'user-2');assert.equal(h.api.S.ws.id,'workspace-next');assert.equal(h.api.S.role,'worker');
+  assert.deepEqual([...h.api.S.farms].map(farm=>farm.id),['next-farm']);
+});
+
+test('a Settings farm refresh cannot overwrite farms after its account changes',async()=>{
+  const h=await harness(),farms=Array.from({length:1001},(_,index)=>({id:`farm-${index}`,name:`Farm ${index}`}));
+  let release,hold=false,started=false;const waiting=new Promise(resolve=>{release=resolve;});
+  h.db.select=async(table,query='')=>{
+    assert.equal(table,'farms');
+    if(hold){started=true;await waiting;return[{id:'old-farm',name:'Old farm'}];}
+    const offset=Number(new URLSearchParams(query).get('offset')||0);return farms.slice(offset,offset+1000);
+  };
+  h.location.hash='#/settings';await h.api.route();await settle();
+  const resource=h.calls.find(call=>call.name==='resource');assert.ok(resource);
+  h.api.S.farmId='farm-1000';await resource.cfg.afterChange();
+  assert.equal(h.api.S.farms.length,1001);assert.equal(h.api.S.farmId,'farm-1000');
+  hold=true;
+  const pending=resource.cfg.afterChange();await settle();
+  assert.equal(started,true,'The refresh must be waiting on the original context before switching accounts.');
+  h.setSession({user:{id:'user-2'}});Object.assign(h.api.S,{userId:'user-2',ws:{id:'workspace-next',currency:'KES'},farms:[{id:'next-farm'}],farmId:'next-farm'});
+  release();await pending;
+  assert.deepEqual([...h.api.S.farms].map(farm=>farm.id),['next-farm']);assert.equal(h.api.S.farmId,'next-farm');
 });

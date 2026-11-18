@@ -4,8 +4,10 @@ Inventory taken before simplification and updated 18 November 2026 against the
 expanded working draft. **No feature was merged or retired.** All 16 sections and
 14 business view functions remain, with Members/Invitations served by the checked
 team interface. "Draft" means implemented in this branch, not released or verified
-live. All three SQL migrations remain unapplied; SQL role/two-workspace/farm-scope
-rollback suites are unexecuted. Production schema, RLS and rows are unchanged.
+live. All three SQL migrations remain uninstalled. All three SQL
+role/two-workspace/farm-scope suites passed on the current project inside a
+reviewed rollback-only transaction; no schema, RLS or fixture rows were retained.
+The latest run included the complete finance aggregate/server-close extension.
 
 ## Navigation before → after
 
@@ -122,7 +124,7 @@ These remain in the checklist even when hidden behind progressive disclosure.
 
 | ID | Required feature | Current status | Target |
 | --- | --- | --- | --- |
-| D01 | Database-computed KPI values, previous-period change and sparklines | Implemented SQL/UI draft; SQL unexecuted | Overview → Summary |
+| D01 | Database-computed KPI values, previous-period change and sparklines | SQL suite passed in rollback rehearsal; RPC remains uninstalled | Overview → Summary |
 | D02 | Income/expense/net monthly, cash trend, category spend | Implemented; local sample browser checks | Overview → Summary / More insights |
 | D03 | Budget/actual and income targets, farm comparison, enterprise margin | Implemented SQL/UI; migration required | Overview → More insights |
 | D04 | Payroll share, top vendors, current task progress/latest-only calendar | Implemented SQL/UI; history caveat retained | Overview → Summary / More insights |
@@ -133,7 +135,7 @@ These remain in the checklist even when hidden behind progressive disclosure.
 | C02 | Theme/default farm/default period | Implemented; new defaults require migration | Account → Profile → More options → Display options |
 | C03 | Reauthenticated password/email changes, verification, connected methods | Implemented; live email/Google flows unverified | Account → Security |
 | C04 | Own session inventory, sign out other devices | Implemented; own-session RPC unapplied, live revocation unverified | Account → Security |
-| C05 | Optional TOTP enroll/challenge/verify/remove; enforce aal2 after opt-in | Implemented; live TOTP/enforcement unverified | Account → Security |
+| C05 | Optional TOTP enroll/challenge/verify/remove; enforce aal2 after opt-in | SQL guards exercised in rollback; real TOTP flows unverified, migration uninstalled | Account → Security |
 | C06 | Alert/channel choices and in-app alerts; honest email-channel capability | Implemented; preferences/dashboard RPCs unapplied, no email delivery claim | Account → More → Notifications |
 | C07 | Workspace list/role/switch/create/leave; transfer before owner departure | Implemented; checked RPC proposal unapplied | Account → Workspaces |
 | C08 | Own-data JSON export, guarded account deletion, business-record retention | Implemented; migration/server credential and live checks required | Account → More → Data & privacy |
@@ -142,10 +144,10 @@ These remain in the checklist even when hidden behind progressive disclosure.
 
 ## Verification status
 
-- Latest full run: **178 JavaScript tests pass**.
-  Static checks pass: 21 browser modules, two APIs, 12 business routes, five pages,
+- Latest full run: **214 JavaScript tests pass**.
+  Static checks pass: 22 browser modules, two APIs, 12 business routes, five pages,
   16 sections and 12 assets. All 32 configured contrast pairs pass per theme.
-  This is not execution of the SQL suites.
+  JavaScript checks are separate from the SQL rehearsal results below.
 - Invented local data only: DOM checks found no horizontal overflow at 360, 768,
   1024 and 1440 px in both themes for Overview, Tasks, Transactions, Workers,
   Reports, Account Profile and Settings. Overview screenshots covered all four
@@ -154,14 +156,20 @@ These remain in the checklist even when hidden behind progressive disclosure.
   separate from source-level preservation of the checklist.
 - The 360 px dark task drawer's sticky save, inline validation and discard prompt
   were inspected; sample task completion updated immediately with a success toast.
+  Final sample checks passed Budget Close/saved feedback, Copy's missing-budget
+  feedback, Report, transaction Add/search, and Filters cancel/later budget discard
+  protection. Budgets had no overflow at all four widths in both themes.
   Browser PDF/XLSX and chart PNG/CSV downloads worked; PNG was rendered, PDF
   parsed/rendered and XLSX loaded with openpyxl. Desktop Excel/PDF-reader opening,
   physical devices and screen readers remain unverified.
-- Browser metadata verified `kirubiianmwangi-crypto` / Fieldnote
-  (`nwuyizxxtfrncigorfji`): 24 original public tables and six inspected core RLS
-  flags enabled. The connected tool still shows the older `pollwave` account.
-  No production row, schema or RLS write occurred. All three migrations and SQL
-  role/two-workspace/farm-scope rollback suites remain unapplied/unexecuted.
+- The current project's 44 anonymous/nonmember read-only checks passed. The
+  members/roles, dashboard/finance and Account suites then passed in a separately
+  reviewed rollback rehearsal. All 1,299 catalog items matched baseline MD5
+  `992fc360118daa1d8f2398d90ba4f75b`, with no fixture IDs across 25 reserved prefixes.
+  The latest run included complete 1,005-row totals/server close and role/farm-scope
+  rejections. No migrations remain installed; normal logs and audit identity
+  sequence gaps can survive rollback, and sequences were not reset. Real Auth/HTTP and
+  concurrent-session behavior are separate checks.
 - Real Auth email/OAuth/TOTP/deletion and Vercel environment wiring remain
   unverified. See [USABILITY-HANDOFF.md](USABILITY-HANDOFF.md) for Ian's release checks.
 

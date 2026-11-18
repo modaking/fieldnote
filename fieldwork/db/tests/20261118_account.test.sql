@@ -1,16 +1,22 @@
--- EXECUTABLE STAGING TESTS: NOT EXECUTED in this workspace.
+-- EXECUTABLE SQL TESTS: see README.md for execution results and rehearsal limits.
 -- Run as the database owner in disposable Supabase/PostgreSQL staging after
 -- schema.sql, 20261118_members_roles.sql and 20261118_account.sql.
 -- psql <staging connection> -v ON_ERROR_STOP=1 -f this-file.sql
 -- Rollback fixtures only; no real credentials, emails, TOTP secrets or Auth calls.
 begin;
+-- Initialize the backend's temporary namespace before creating its helpers.
+create temporary table fw_account_test_namespace_anchor(unused boolean);
+do $temp_schema_grants$ declare namespace_name text; begin
+  select nspname into namespace_name from pg_namespace where oid=pg_my_temp_schema();
+  if namespace_name is null then raise exception 'Test temporary namespace was not initialized';end if;
+  execute format('grant usage on schema %I to authenticated',namespace_name);
+end $temp_schema_grants$;
 create function pg_temp.account_assert(ok boolean,message text) returns void language plpgsql as $$
 begin if ok is not true then raise exception 'ASSERTION FAILED: %',message;end if;end $$;
 create function pg_temp.account_denied(statement text,expected text default '42501') returns void language plpgsql as $$
 begin begin execute statement;exception when others then if sqlstate=expected then return;end if;raise exception 'Expected %, got %: %',expected,sqlstate,sqlerrm;end;raise exception 'Expected denial: %',statement;end $$;
 create function pg_temp.account_actor(uid uuid,aal text default 'aal1',sid uuid default null) returns void language plpgsql as $$
 begin perform set_config('request.jwt.claim.sub',uid::text,true);perform set_config('request.jwt.claims',jsonb_build_object('sub',uid,'role','authenticated','aal',aal,'session_id',sid)::text,true);end $$;
-grant usage on schema pg_temp to authenticated;
 grant execute on function pg_temp.account_assert(boolean,text),pg_temp.account_denied(text,text),pg_temp.account_actor(uuid,text,uuid) to authenticated;
 
 insert into auth.users(id,email,email_confirmed_at,raw_user_meta_data,raw_app_meta_data) values
@@ -82,4 +88,6 @@ set local role authenticated;
 select pg_temp.account_actor('b1000000-0000-4000-8000-000000000002','aal2','b6000000-0000-4000-8000-000000000001');
 select pg_temp.account_denied($q$select public.fw_account_context()$q$);
 reset role;
+-- Validate deferred FKs before the suite can report PASS and roll back.
+set constraints all immediate;
 rollback;

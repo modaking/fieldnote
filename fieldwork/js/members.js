@@ -1,4 +1,5 @@
 // Team access uses checked database RPCs; roles and farm scope are enforced in SQL.
+import {readRpcAll} from './read-all.js';
 import * as C from './components.js';
 import { ROLE_OPTIONS, canManageMembers, canManageMember } from './permissions.js';
 import { buildInviteURL } from './invites.js';
@@ -28,7 +29,7 @@ export async function members(el, X, options = {}) {
     el.innerHTML = C.pageHeader({ title: pageTitle, description: 'Loading your team’s access…' }) + C.skeletonRows({ rows: 5, columns: 4 });
     try {
       [memberRows, inviteRows] = await Promise.all([
-        db.rpc('fw_list_members', { p_workspace_id: ws }), db.rpc('fw_list_invites', { p_workspace_id: ws }),
+        readRpcAll(db,'fw_list_members',{p_workspace_id:ws},'',{key:'user_id',order:'created_at.asc',active}),readRpcAll(db,'fw_list_invites',{p_workspace_id:ws},'',{order:'created_at.desc',active}),
       ]);
       memberRows ||= []; inviteRows ||= [];
       if (active()) paint();

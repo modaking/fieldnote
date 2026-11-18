@@ -2,8 +2,15 @@
 -- Run as database owner on disposable Supabase/PostgreSQL 15+ AFTER schema.sql,
 -- 20261118_members_roles.sql and 20261118_dashboard.sql. No production execution.
 -- No pgTAP/dependencies. Reserved UUIDs/emails; ROLLBACK removes all fixtures.
--- This suite has NOT been executed in this workspace; static review is not RLS proof.
+-- See README.md for execution results; static review is not RLS proof.
 begin;
+-- Initialize the backend's temporary namespace before creating its helpers.
+create temporary table fw_dashboard_test_namespace_anchor(unused boolean);
+do $temp_schema_grants$ declare namespace_name text; begin
+  select nspname into namespace_name from pg_namespace where oid=pg_my_temp_schema();
+  if namespace_name is null then raise exception 'Test temporary namespace was not initialized';end if;
+  execute format('grant usage on schema %I to authenticated,anon',namespace_name);
+end $temp_schema_grants$;
 create function pg_temp.dash_assert(ok boolean,message text) returns void language plpgsql as $$
 begin if ok is not true then raise exception 'ASSERTION FAILED: %',message; end if; end $$;
 create function pg_temp.dash_error(statement text,expected text default '42501') returns void language plpgsql as $$
@@ -19,7 +26,6 @@ begin
   perform set_config('request.jwt.claim.sub',coalesce(uid::text,''),true);
   perform set_config('request.jwt.claims',jsonb_build_object('sub',uid,'role',case when uid is null then 'anon' else 'authenticated' end)::text,true);
 end $$;
-grant usage on schema pg_temp to authenticated,anon;
 grant execute on function pg_temp.dash_assert(boolean,text),pg_temp.dash_error(text,text),pg_temp.dash_actor(uuid) to authenticated,anon;
 create temporary table dashboard_outputs(label text primary key,data jsonb);
 grant select,insert,update on dashboard_outputs to authenticated;
@@ -27,6 +33,9 @@ grant select,insert,update on dashboard_outputs to authenticated;
 select pg_temp.dash_assert(to_regprocedure('public.fw_dashboard(uuid,date,date,uuid)') is not null,'dashboard installed');
 select pg_temp.dash_assert((select not prosecdef from pg_proc where oid='public.fw_dashboard(uuid,date,date,uuid)'::regprocedure),'dashboard must run as caller, not owner');
 select pg_temp.dash_assert(not has_function_privilege('anon','public.fw_dashboard(uuid,date,date,uuid)','execute'),'anonymous execution denied');
+select pg_temp.dash_assert((select count(*)=3 and bool_and(not prosecdef) from pg_proc where oid in
+  ('public.fw_transaction_totals(uuid,date,date,uuid,jsonb)'::regprocedure,'public.fw_finance_month(uuid,date,uuid)'::regprocedure,'public.fw_close_month(uuid,date,uuid)'::regprocedure)),'all finance RPCs run as caller');
+select pg_temp.dash_assert(not has_function_privilege('anon','public.fw_close_month(uuid,date,uuid)','execute'),'anonymous cannot close a month');
 select pg_temp.dash_assert((fw_private.dashboard_kpi(10,0,'count',true)->>'change_pct') is null,'previous zero has no percentage');
 select pg_temp.dash_assert(fw_private.dashboard_kpi(10,0,'count',true)->>'trend'='new','zero baseline is new');
 select pg_temp.dash_assert(fw_private.dashboard_kpi(0,0,'currency',true)->>'trend'='flat','zero-to-zero is flat');
@@ -162,6 +171,9 @@ revoke select on public.transactions,public.budgets,public.month_closings,public
 select pg_temp.dash_actor('d1000000-0000-4000-8000-000000000005'); set local role authenticated;
 insert into dashboard_outputs values('worker',public.fw_dashboard('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01'));
 select pg_temp.dash_assert(data#>'{kpis,income,available}'='false'::jsonb and data#>'{kpis,income,value}'='null'::jsonb and data->'payroll'='null'::jsonb and data->'top_vendors'='[]'::jsonb,'worker receives no financial query or figures') from dashboard_outputs where label='worker';
+select pg_temp.dash_error($q$select public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01')$q$);
+select pg_temp.dash_error($q$select public.fw_finance_month('d2000000-0000-4000-8000-000000000001','2026-11-01')$q$);
+select pg_temp.dash_error($q$select public.fw_close_month('d2000000-0000-4000-8000-000000000001','2026-11-01','d3000000-0000-4000-8000-000000000001')$q$);
 select pg_temp.dash_assert(not exists(select 1 from jsonb_array_elements(data->'attention') v where v->>'kind'<>'overdue_task'),'worker attention is operational only') from dashboard_outputs where label='worker';
 reset role;
 select pg_temp.dash_actor('d1000000-0000-4000-8000-000000000006'); set local role authenticated;
@@ -195,4 +207,56 @@ select pg_temp.dash_assert(not exists(select 1 from jsonb_array_elements(data->'
 select pg_temp.dash_assert(exists(select 1 from jsonb_array_elements(data->'attention') v where v->>'kind'='expense_budget_near' and v->>'title'='Budget: Current attention expense'),'90 percent current expense budget triggers attention') from dashboard_outputs where label='posted';
 select pg_temp.dash_assert((select amount-paid_amount=6000 from public.vendor_bills where workspace_id='d2000000-0000-4000-8000-000000000001'),'posting transactions never pays a bill automatically');
 reset role;
+
+-- Unplanned categories, uncategorised money, and legacy category-kind mismatch
+-- remain represented. No rows are hidden to make a budget presentation balance.
+select pg_temp.dash_actor(null);
+insert into public.categories(id,workspace_id,name,kind) values('d4000000-0000-4000-8000-000000000004','d2000000-0000-4000-8000-000000000001','Unplanned sale','income');
+insert into public.transactions(workspace_id,farm_id,txn_date,kind,amount,currency,category_id,description) values
+ ('d2000000-0000-4000-8000-000000000001','d3000000-0000-4000-8000-000000000001','2026-11-07','income',5,'KES','d4000000-0000-4000-8000-000000000004','Small unplanned sale'),
+ ('d2000000-0000-4000-8000-000000000001','d3000000-0000-4000-8000-000000000001','2026-11-07','expense',7,'KES',null,'Uncategorised item'),
+ ('d2000000-0000-4000-8000-000000000001','d3000000-0000-4000-8000-000000000001','2026-11-07','expense',11,'KES','d4000000-0000-4000-8000-000000000002','Category type differs'),
+ ('d2000000-0000-4000-8000-000000000001','d3000000-0000-4000-8000-000000000001','2026-11-07','expense',13,'KES',null,'Literal 100%_ marker');
+select pg_temp.dash_actor('d1000000-0000-4000-8000-000000000001');set local role authenticated;
+insert into dashboard_outputs values
+ ('finance_month',public.fw_finance_month('d2000000-0000-4000-8000-000000000001','2026-11-01','d3000000-0000-4000-8000-000000000001')),
+ ('finance_dashboard',public.fw_dashboard('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01','d3000000-0000-4000-8000-000000000001')),
+ ('finance_totals',public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01','d3000000-0000-4000-8000-000000000001'));
+select pg_temp.dash_assert(m.data#>'{totals,income}'=d.data#>'{kpis,income,value}' and m.data#>'{totals,expenses}'=d.data#>'{kpis,expenses,value}'
+  and t.data->'net'=m.data#>'{totals,net}','finance RPCs and dashboard use identical full-scope base totals') from dashboard_outputs m,dashboard_outputs d,dashboard_outputs t where m.label='finance_month' and d.label='finance_dashboard' and t.label='finance_totals';
+select pg_temp.dash_assert((data#>>'{totals,opening}')::numeric=5000 and (data#>>'{totals,opening_recorded}')::boolean,'opening is exact previous saved month') from dashboard_outputs where label='finance_month';
+select pg_temp.dash_assert(exists(select 1 from jsonb_array_elements(data->'categories') c where c->>'name'='Unplanned sale' and c->>'kind'='income' and (c->>'actual')::numeric=5 and (c->>'budget')::numeric=0),'unplanned income category remains visible') from dashboard_outputs where label='finance_month';
+select pg_temp.dash_assert(exists(select 1 from jsonb_array_elements(data->'categories') c where c->'id'='null'::jsonb and c->>'kind'='expense' and (c->>'actual')::numeric>=20 and not(c->>'can_budget')::boolean),'uncategorised spending remains visible and cannot have a category budget') from dashboard_outputs where label='finance_month';
+select pg_temp.dash_assert(exists(select 1 from jsonb_array_elements(data->'categories') c where c->>'id'='d4000000-0000-4000-8000-000000000002' and c->>'kind'='expense' and (c->>'actual')::numeric=11 and not(c->>'can_budget')::boolean),'legacy category-kind mismatch is retained read-only') from dashboard_outputs where label='finance_month';
+select pg_temp.dash_assert((public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01',null,'{"q":"100%_"}')->>'expenses')::numeric=13,'search treats percent/underscore literally');
+select pg_temp.dash_assert((public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01',null,'{"q":"SALES (income)"}')->>'expenses')::numeric=11,'search includes exact displayed category label case-insensitively');
+select pg_temp.dash_assert((public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01',null,'{"q":"Linked dairy"}')->>'net')::numeric=87500,'search includes accessible enterprise names');
+select pg_temp.dash_assert((public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01',null,'{"category_id":"d4000000-0000-4000-8000-000000000004","kind":"income"}')->>'income')::numeric=5,'typed filters compose with complete totals');
+select pg_temp.dash_error($q$select public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01',null,'{"id":"bad"}')$q$,'22023');
+select pg_temp.dash_error($q$select public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01',null,'{"unsafe":true}')$q$,'22023');
+select pg_temp.dash_error($q$select public.fw_finance_month('d2000000-0000-4000-8000-000000000001','2026-11-02')$q$,'22023');
+select pg_temp.dash_error($q$select public.fw_close_month('d2000000-0000-4000-8000-000000000001','2026-11-01',null)$q$,'22023');
+select pg_temp.dash_error($q$select public.fw_finance_month('d2000000-0000-4000-8000-000000000002','2026-11-01')$q$);
+insert into dashboard_outputs values('no_opening',public.fw_finance_month('d2000000-0000-4000-8000-000000000001','2026-09-01','d3000000-0000-4000-8000-000000000001'));
+select pg_temp.dash_assert((data#>>'{totals,opening}')::numeric=0 and data#>'{totals,opening_recorded}'='false'::jsonb and data#>'{totals,saved_closing}'='null'::jsonb,'legacy zero opening is explicitly distinguished from a saved balance') from dashboard_outputs where label='no_opening';
+insert into dashboard_outputs values('closed',public.fw_close_month('d2000000-0000-4000-8000-000000000001','2026-11-01','d3000000-0000-4000-8000-000000000001'));
+select pg_temp.dash_assert(data#>'{totals,saved_closing}'=data#>'{totals,calculated_closing}','server close recomputes and saves the refreshed database balance') from dashboard_outputs where label='closed';
+select public.fw_close_month('d2000000-0000-4000-8000-000000000001','2026-11-01','d3000000-0000-4000-8000-000000000001');
+select pg_temp.dash_assert((select count(*)=1 from public.month_closings where workspace_id='d2000000-0000-4000-8000-000000000001' and farm_id='d3000000-0000-4000-8000-000000000001' and month='2026-11-01'),'retrying close updates one existing snapshot');
+select pg_temp.dash_actor('d1000000-0000-4000-8000-000000000003');
+select pg_temp.dash_error($q$select public.fw_close_month('d2000000-0000-4000-8000-000000000001','2026-11-01','d3000000-0000-4000-8000-000000000002')$q$);
+select pg_temp.dash_assert((public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01')->>'income')::numeric=100005,'restricted aggregate excludes other/shared farms');
+select pg_temp.dash_actor('d1000000-0000-4000-8000-000000000001');
+insert into dashboard_outputs values('before_cap',public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01'));
+reset role;select pg_temp.dash_actor(null);
+insert into public.transactions(workspace_id,farm_id,txn_date,kind,amount,currency,description)
+ select 'd2000000-0000-4000-8000-000000000001'::uuid,'d3000000-0000-4000-8000-000000000001'::uuid,'2026-11-08'::date,'expense',1,'KES','Cap fixture '||n from generate_series(1,1005) n;
+select pg_temp.dash_actor('d1000000-0000-4000-8000-000000000001');set local role authenticated;
+select pg_temp.dash_assert((public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01')->>'expenses')::numeric=(data->>'expenses')::numeric+1005
+ and (public.fw_transaction_totals('d2000000-0000-4000-8000-000000000001','2026-11-01','2026-12-01')->>'count')::bigint=(data->>'count')::bigint+1005,'aggregate includes every row beyond the REST 1000-row cap') from dashboard_outputs where label='before_cap';
+select public.fw_close_month('d2000000-0000-4000-8000-000000000001','2026-11-01','d3000000-0000-4000-8000-000000000001');
+select pg_temp.dash_assert((select closing_cash=(select 5000+sum(case kind when 'income' then amount_base else -amount_base end) from public.transactions where workspace_id='d2000000-0000-4000-8000-000000000001' and farm_id='d3000000-0000-4000-8000-000000000001' and txn_date>='2026-11-01' and txn_date<'2026-12-01') from public.month_closings where workspace_id='d2000000-0000-4000-8000-000000000001' and farm_id='d3000000-0000-4000-8000-000000000001' and month='2026-11-01'),'atomic close includes every bulk fixture row');
+reset role;
+-- Validate deferred FKs before the suite can report PASS and roll back.
+set constraints all immediate;
 rollback;

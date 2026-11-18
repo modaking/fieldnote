@@ -1,5 +1,6 @@
 -- REVIEW / STAGING ONLY. Apply AFTER 20261118_members_roles.sql, never schema.sql again.
--- Read-only dashboard API. No existing rows are changed or backfilled.
+-- Dashboard/finance APIs. No existing rows are changed or backfilled by this
+-- migration. The checked close RPC records only an explicitly requested farm.
 -- SECURITY INVOKER is intentional: every contributing SELECT is subject to the
 -- caller's table privileges and the members migration's restrictive RLS policies.
 -- Separate role branches avoid even querying finance for operational roles or
@@ -289,6 +290,104 @@ begin
     into attention from jsonb_array_elements(attention) a(item);
   return jsonb_set(result,'{attention}',attention)||jsonb_build_object('attention_count',jsonb_array_length(attention));
 end $$;
+
+-- Complete database totals, independent of any REST/list pagination cap.
+create or replace function public.fw_transaction_totals(
+  p_workspace_id uuid,p_from date,p_to date,p_farm_id uuid default null,p_filters jsonb default '{}'::jsonb
+) returns jsonb language plpgsql stable security invoker set search_path=pg_catalog,public as $$
+declare r text; filters jsonb:=coalesce(p_filters,'{}'::jsonb); k text; query_text text; result jsonb;
+begin
+  r:=public.fw_role(p_workspace_id);
+  if auth.uid() is null or r is null or r not in ('owner','admin','manager','accountant') then raise exception 'Financial access is required' using errcode='42501';end if;
+  if p_workspace_id is null or p_from is null or p_to is null or not isfinite(p_from) or not isfinite(p_to) then raise exception 'Choose a finite date range' using errcode='22023';end if;
+  if p_to<=p_from or p_to-p_from>3660 then raise exception 'Choose a nonempty date range of at most 3660 days (end exclusive)' using errcode='22023';end if;
+  if not exists(select 1 from public.workspaces where id=p_workspace_id) then raise exception 'Workspace access is required' using errcode='42501';end if;
+  if p_farm_id is not null and not exists(select 1 from public.farms where id=p_farm_id and workspace_id=p_workspace_id) then raise exception 'The selected farm is unavailable' using errcode='42501';end if;
+  if jsonb_typeof(filters)<>'object' or exists(select 1 from jsonb_object_keys(filters) x(key) where key<>all(array['kind','category_id','vendor_id','enterprise_id','source_type','source_id','id','q'])) then raise exception 'Choose supported transaction filters' using errcode='22023';end if;
+  foreach k in array array['category_id','vendor_id','enterprise_id','source_id','id'] loop
+    if filters?k and filters->k<>'null'::jsonb and (jsonb_typeof(filters->k)<>'string' or (filters->>k)!~*'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') then raise exception 'Choose valid transaction filter IDs' using errcode='22023';end if;
+  end loop;
+  if filters?'kind' and (jsonb_typeof(filters->'kind')<>'string' or filters->>'kind' not in ('income','expense')) then raise exception 'Choose income or expense' using errcode='22023';end if;
+  if filters?'source_type' and filters->'source_type'<>'null'::jsonb and (jsonb_typeof(filters->'source_type')<>'string' or filters->>'source_type' not in ('worker_pay','recurring','project')) then raise exception 'Choose a valid transaction source' using errcode='22023';end if;
+  if filters?'q' and jsonb_typeof(filters->'q') not in ('string','null') then raise exception 'Enter a text search' using errcode='22023';end if;
+  query_text:=lower(coalesce(filters->>'q',''));
+  select jsonb_build_object('schema_version','20261118-finance','income',coalesce(sum(t.amount_base) filter(where t.kind='income'),0),
+    'expenses',coalesce(sum(t.amount_base) filter(where t.kind='expense'),0),
+    'net',coalesce(sum(case when t.kind='income' then t.amount_base else -t.amount_base end),0),'count',count(*)) into result
+  from public.transactions t
+  left join public.categories c on c.id=t.category_id and c.workspace_id=p_workspace_id
+  left join public.vendors v on v.id=t.vendor_id and v.workspace_id=p_workspace_id
+  left join public.farms f on f.id=t.farm_id and f.workspace_id=p_workspace_id
+  left join public.enterprises e on e.id=t.enterprise_id and e.workspace_id=p_workspace_id and (p_farm_id is null or e.farm_id=p_farm_id)
+  where t.workspace_id=p_workspace_id and t.txn_date>=p_from and t.txn_date<p_to and (p_farm_id is null or t.farm_id=p_farm_id)
+    and (not(filters?'kind') or t.kind=filters->>'kind')
+    and (not(filters?'category_id') or t.category_id is not distinct from (filters->>'category_id')::uuid)
+    and (not(filters?'vendor_id') or t.vendor_id is not distinct from (filters->>'vendor_id')::uuid)
+    and (not(filters?'enterprise_id') or t.enterprise_id is not distinct from (filters->>'enterprise_id')::uuid)
+    and (not(filters?'source_id') or t.source_id is not distinct from (filters->>'source_id')::uuid)
+    and (not(filters?'id') or t.id is not distinct from (filters->>'id')::uuid)
+    and (not(filters?'source_type') or t.source_type is not distinct from filters->>'source_type')
+    and (query_text='' or position(query_text in lower(coalesce(t.description,'')))>0
+      or position(query_text in lower(coalesce(c.name||' ('||c.kind||')','')))>0 or position(query_text in lower(coalesce(v.name,'')))>0
+      or position(query_text in lower(coalesce(f.name,'')))>0 or position(query_text in lower(coalesce(e.name,'')))>0);
+  return result;
+end $$;
+
+create or replace function public.fw_finance_month(p_workspace_id uuid,p_month date,p_farm_id uuid default null)
+returns jsonb language plpgsql stable security invoker set search_path=pg_catalog,public as $$
+declare next_month date; prior_month date; totals jsonb; category_rows jsonb; section_rows jsonb; base text; opening numeric; opening_count bigint; saved numeric;
+begin
+  if p_month is null or not isfinite(p_month) then raise exception 'Choose a finite month start' using errcode='22023';end if;
+  if extract(day from p_month)<>1 then raise exception 'Choose the first day of the month' using errcode='22023';end if;
+  next_month:=(p_month+interval '1 month')::date;prior_month:=(p_month-interval '1 month')::date;
+  -- This performs the role/MFA, workspace, selected-farm and date checks before
+  -- any other financial query. All following reads remain SECURITY INVOKER.
+  totals:=public.fw_transaction_totals(p_workspace_id,p_month,next_month,p_farm_id);
+  select currency into base from public.workspaces where id=p_workspace_id;
+  select coalesce(sum(closing_cash),0),count(*) into opening,opening_count from public.month_closings
+    where workspace_id=p_workspace_id and month=prior_month and (p_farm_id is null or farm_id=p_farm_id);
+  select sum(closing_cash) into saved from public.month_closings
+    where workspace_id=p_workspace_id and month=p_month and (p_farm_id is null or farm_id=p_farm_id);
+  with cats as materialized(select id,name,kind from public.categories where workspace_id=p_workspace_id),
+  actual as (select category_id,kind,sum(amount_base) as amount from public.transactions
+    where workspace_id=p_workspace_id and txn_date>=p_month and txn_date<next_month and (p_farm_id is null or farm_id=p_farm_id) group by category_id,kind),
+  plans as (select b.category_id,coalesce(c.kind,'unknown') as kind,sum(b.amount) as amount from public.budgets b left join cats c on c.id=b.category_id
+    where b.workspace_id=p_workspace_id and b.month=p_month and (p_farm_id is null or b.farm_id=p_farm_id) group by b.category_id,c.kind),
+  keys as (select id,kind from cats union select category_id,kind from actual union select category_id,kind from plans),
+  lines as (select k.id,k.kind,case when k.id is null then 'Uncategorised' else coalesce(c.name,'Unknown category') end as name,
+    coalesce(p.amount,0) as budget,coalesce(a.amount,0) as actual,
+    c.id is not null and k.kind=c.kind and p_farm_id is not null and fw_private.can_write(p_workspace_id,'budgets',p_farm_id,'insert') as can_budget
+    from keys k left join cats c on c.id=k.id left join actual a on a.category_id is not distinct from k.id and a.kind=k.kind
+    left join plans p on p.category_id is not distinct from k.id and p.kind=k.kind)
+  select coalesce(jsonb_agg(jsonb_build_object('id',id,'name',name,'kind',kind,'budget',budget,'actual',actual,'can_budget',can_budget,
+      'variance',case kind when 'expense' then budget-actual when 'income' then actual-budget end,
+      'pct',case when budget<>0 then round(actual/budget*100,2) end,'over_budget',kind='expense' and budget>0 and actual>budget) order by kind,name,id),'[]'::jsonb),
+    jsonb_build_object('income',jsonb_build_object('budget',coalesce(sum(budget) filter(where kind='income'),0),'actual',coalesce(sum(actual) filter(where kind='income'),0)),
+      'expense',jsonb_build_object('budget',coalesce(sum(budget) filter(where kind='expense'),0),'actual',coalesce(sum(actual) filter(where kind='expense'),0)),
+      'unknown',jsonb_build_object('budget',coalesce(sum(budget) filter(where kind='unknown'),0),'actual',coalesce(sum(actual) filter(where kind='unknown'),0)))
+    into category_rows,section_rows from lines;
+  return jsonb_build_object('schema_version','20261118-finance','period',jsonb_build_object('from',p_month,'to',next_month),'currency',base,
+    'totals',jsonb_build_object('income',totals->'income','expenses',totals->'expenses','net',totals->'net','opening',opening,
+      'calculated_closing',opening+(totals->>'net')::numeric,'saved_closing',saved,'opening_recorded',opening_count>0),
+    'categories',category_rows,'sections',section_rows);
+end $$;
+
+create or replace function public.fw_close_month(p_workspace_id uuid,p_month date,p_farm_id uuid)
+returns jsonb language plpgsql volatile security invoker set search_path=pg_catalog,public as $$
+declare result jsonb; closing_value bigint;
+begin
+  if p_farm_id is null then raise exception 'Choose one farm before closing its month' using errcode='22023';end if;
+  -- The month RPC checks read access and dates before any amount is computed.
+  result:=public.fw_finance_month(p_workspace_id,p_month,p_farm_id);
+  if not fw_private.can_write(p_workspace_id,'month_closings',p_farm_id,'insert') or not fw_private.can_write(p_workspace_id,'month_closings',p_farm_id,'update') then
+    raise exception 'Permission to record this farm closing is required' using errcode='42501';end if;
+  closing_value:=(result#>>'{totals,calculated_closing}')::bigint;
+  insert into public.month_closings(workspace_id,farm_id,month,closing_cash) values(p_workspace_id,p_farm_id,p_month,closing_value)
+    on conflict(workspace_id,farm_id,month) do update set closing_cash=excluded.closing_cash;
+  return public.fw_finance_month(p_workspace_id,p_month,p_farm_id);
+end $$;
+revoke all on function public.fw_transaction_totals(uuid,date,date,uuid,jsonb),public.fw_finance_month(uuid,date,uuid),public.fw_close_month(uuid,date,uuid) from public,anon;
+grant execute on function public.fw_transaction_totals(uuid,date,date,uuid,jsonb),public.fw_finance_month(uuid,date,uuid),public.fw_close_month(uuid,date,uuid) to authenticated;
 
 revoke all on function public.fw_dashboard(uuid,date,date,uuid) from public,anon;
 grant execute on function public.fw_dashboard(uuid,date,date,uuid) to authenticated;

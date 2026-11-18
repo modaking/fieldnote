@@ -4,9 +4,16 @@
 -- Example: psql <staging connection> -v ON_ERROR_STOP=1 -f this-file.sql
 -- Fixtures use reserved test UUIDs/.invalid emails; the final ROLLBACK removes all.
 -- No pgTAP or additional database extension is required beyond the base schema.
--- This suite has NOT been executed in the provided workspace: no matching local
--- PostgreSQL/staging connection was available. Static inspection is not RLS proof.
+-- See README.md for the latest execution results and rehearsal limits.
+-- Creating or statically inspecting this file is not RLS verification.
 begin;
+-- A fresh backend has no pg_temp namespace until its first temporary object.
+create temporary table fw_members_test_namespace_anchor(unused boolean);
+do $temp_schema_grants$ declare namespace_name text; begin
+  select nspname into namespace_name from pg_namespace where oid=pg_my_temp_schema();
+  if namespace_name is null then raise exception 'Test temporary namespace was not initialized';end if;
+  execute format('grant usage on schema %I to authenticated,anon',namespace_name);
+end $temp_schema_grants$;
 
 create function pg_temp.fw_assert(ok boolean,message text) returns void language plpgsql as $$
 begin if ok is not true then raise exception 'ASSERTION FAILED: %',message; end if; end $$;
@@ -24,12 +31,13 @@ begin
   perform set_config('request.jwt.claim.sub',coalesce(uid::text,''),true);
   perform set_config('request.jwt.claims',jsonb_build_object('sub',uid,'role',case when uid is null then 'anon' else 'authenticated' end)::text,true);
 end $$;
-grant usage on schema pg_temp to authenticated,anon;
 grant execute on function pg_temp.fw_assert(boolean,text),pg_temp.fw_expect_error(text,text),pg_temp.fw_actor(uuid) to authenticated,anon;
 create temporary table fw_test_invites(label text primary key,payload jsonb);
 grant select,insert,update on fw_test_invites to authenticated;
 
 select pg_temp.fw_assert(to_regprocedure('public.fw_access_context(uuid)') is not null,'migration must be installed');
+select pg_temp.fw_assert((select condeferrable and condeferred and confdeltype='n' from pg_constraint
+  where conrelid='public.transactions'::regclass and conname='transactions_enterprise_id_fkey'),'enterprise FK preserves SET NULL and checks after cascades finish');
 select pg_temp.fw_assert(not has_table_privilege('anon','public.workspace_invites','select'),'anon cannot enumerate invitation hashes');
 select pg_temp.fw_assert(not has_table_privilege('authenticated','public.workspace_invites','select'),'authenticated cannot enumerate invitation hashes');
 select pg_temp.fw_assert(not has_table_privilege('authenticated','public.workspace_members','update'),'membership writes are RPC-only');
@@ -100,8 +108,8 @@ insert into public.enterprises(id,workspace_id,farm_id,name,type) values
  ('9e000000-0000-4000-8000-000000000001','98000000-0000-4000-8000-000000000001','99000000-0000-4000-8000-000000000001','Allowed enterprise','crop'),
  ('9e000000-0000-4000-8000-000000000002','98000000-0000-4000-8000-000000000001','99000000-0000-4000-8000-000000000002','Other farm enterprise','crop'),
  ('9e000000-0000-4000-8000-000000000003','98000000-0000-4000-8000-000000000002','99000000-0000-4000-8000-000000000003','Other tenant enterprise','crop');
-update public.transactions set receipt_path='98000000-0000-4000-8000-000000000001/farm-one-receipt.jpg' where description='Farm A1';
-update public.transactions set receipt_path='98000000-0000-4000-8000-000000000001/farm-two-receipt.jpg' where description='Farm A2';
+update public.transactions set receipt_path='98000000-0000-4000-8000-000000000001/farm-one-receipt.jpg' where workspace_id='98000000-0000-4000-8000-000000000001' and description='Farm A1';
+update public.transactions set receipt_path='98000000-0000-4000-8000-000000000001/farm-two-receipt.jpg' where workspace_id='98000000-0000-4000-8000-000000000001' and description='Farm A2';
 
 -- Manager: tenant boundaries, relationship integrity, no member-admin escalation.
 select pg_temp.fw_actor('97000000-0000-4000-8000-000000000004'); set local role authenticated;
@@ -110,7 +118,7 @@ select pg_temp.fw_assert((select count(*)=3 from public.transactions),'manager s
 select pg_temp.fw_assert((select count(*)=0 from public.farms where workspace_id='98000000-0000-4000-8000-000000000002'),'explicit other tenant query is empty');
 select pg_temp.fw_expect_error($q$insert into public.transactions(workspace_id,farm_id,kind,amount,currency) values('98000000-0000-4000-8000-000000000001','99000000-0000-4000-8000-000000000003','expense',100,'KES')$q$,'23503');
 select pg_temp.fw_expect_error($q$select public.fw_list_members('98000000-0000-4000-8000-000000000001')$q$);
-select pg_temp.fw_expect_error($q$update public.workspace_members set role='owner' where user_id='97000000-0000-4000-8000-000000000004'$q$);
+select pg_temp.fw_expect_error($q$update public.workspace_members set role='owner' where workspace_id='98000000-0000-4000-8000-000000000001' and user_id='97000000-0000-4000-8000-000000000004'$q$);
 select pg_temp.fw_expect_error($q$select public.fw_access_context('98000000-0000-4000-8000-000000000002')$q$);
 select pg_temp.fw_expect_error($q$insert into public.audit_log(workspace_id,table_name,action) values('98000000-0000-4000-8000-000000000001','transactions','INSERT')$q$);
 reset role;
@@ -162,15 +170,15 @@ select pg_temp.fw_assert((select count(*)=1 from public.vendor_bills),'restricte
 -- A known object name must not become accessible by attaching it to an allowed row.
 select pg_temp.fw_assert(not fw_private.receipt_access('98000000-0000-4000-8000-000000000001/farm-one-receipt.jpg',false),'scoped finance receives no storage objects until provenance exists');
 select pg_temp.fw_assert(not fw_private.receipt_access('98000000-0000-4000-8000-000000000001/farm-two-receipt.jpg',true),'known other-farm receipt cannot be mutated');
-select pg_temp.fw_expect_error($q$update public.transactions set receipt_path='98000000-0000-4000-8000-000000000001/farm-two-receipt.jpg' where description='Farm A1'$q$);
+select pg_temp.fw_expect_error($q$update public.transactions set receipt_path='98000000-0000-4000-8000-000000000001/farm-two-receipt.jpg' where workspace_id='98000000-0000-4000-8000-000000000001' and description='Farm A1'$q$);
 -- Source/enterprise IDs cannot reserve another farm's unique auto-post key or
 -- misattribute its enterprise by placing them on an allowed farm transaction.
 select pg_temp.fw_expect_error($q$insert into public.transactions(workspace_id,farm_id,kind,amount,currency,source_type,source_id,source_period) values('98000000-0000-4000-8000-000000000001','99000000-0000-4000-8000-000000000001','expense',100,'KES','worker_pay','9b000000-0000-4000-8000-000000000003','2026-11-01')$q$,'23503');
 select pg_temp.fw_expect_error($q$insert into public.transactions(workspace_id,farm_id,kind,amount,currency,source_type,source_id,source_period) values('98000000-0000-4000-8000-000000000001','99000000-0000-4000-8000-000000000001','expense',100,'KES','recurring','9d000000-0000-4000-8000-000000000001','2026-11-01')$q$,'23503');
 select pg_temp.fw_expect_error($q$insert into public.transactions(workspace_id,farm_id,kind,amount,currency,source_type,source_id,source_period) values('98000000-0000-4000-8000-000000000001','99000000-0000-4000-8000-000000000001','expense',100,'KES','project','9c000000-0000-4000-8000-000000000003','2026-11-01')$q$,'23503');
-select pg_temp.fw_expect_error($q$update public.transactions set enterprise_id='9e000000-0000-4000-8000-000000000002' where description='Farm A1'$q$,'23503');
-update public.transactions set enterprise_id='9e000000-0000-4000-8000-000000000001' where description='Farm A1';
-select pg_temp.fw_expect_error($q$update public.transactions set farm_id='99000000-0000-4000-8000-000000000002' where description='Farm A1'$q$,'23503');
+select pg_temp.fw_expect_error($q$update public.transactions set enterprise_id='9e000000-0000-4000-8000-000000000002' where workspace_id='98000000-0000-4000-8000-000000000001' and description='Farm A1'$q$,'23503');
+update public.transactions set enterprise_id='9e000000-0000-4000-8000-000000000001' where workspace_id='98000000-0000-4000-8000-000000000001' and description='Farm A1';
+select pg_temp.fw_expect_error($q$update public.transactions set farm_id='99000000-0000-4000-8000-000000000002' where workspace_id='98000000-0000-4000-8000-000000000001' and description='Farm A1'$q$,'23503');
 reset role;
 
 -- Admin cannot escalate into owner/admin access or alter owner privileges.
@@ -183,7 +191,7 @@ reset role;
 
 -- Owner: last-owner protection, hashed one-time invitations, no hash enumeration.
 select pg_temp.fw_actor('97000000-0000-4000-8000-000000000001'); set local role authenticated;
-select pg_temp.fw_expect_error($q$update public.transactions set farm_id='99000000-0000-4000-8000-000000000002' where description='Farm A1'$q$,'23503');
+select pg_temp.fw_expect_error($q$update public.transactions set farm_id='99000000-0000-4000-8000-000000000002' where workspace_id='98000000-0000-4000-8000-000000000001' and description='Farm A1'$q$,'23503');
 select pg_temp.fw_assert(fw_private.receipt_access('98000000-0000-4000-8000-000000000001/farm-one-receipt.jpg',false),'all-farm financial members retain receipt access');
 select pg_temp.fw_expect_error($q$select public.fw_remove_member('98000000-0000-4000-8000-000000000001','97000000-0000-4000-8000-000000000001')$q$,'23514');
 select pg_temp.fw_expect_error($q$select public.fw_change_member('98000000-0000-4000-8000-000000000001','97000000-0000-4000-8000-000000000001','viewer',null)$q$,'23514');
@@ -245,5 +253,8 @@ select pg_temp.fw_expect_error('select * from public.workspace_invites');
 select pg_temp.fw_expect_error($q$select public.fw_accept_invite(repeat('a',64))$q$);
 reset role;
 
+-- A rollback alone would never validate deferred checks. Force every queued FK
+-- before a PASS result or fixture rollback can be reported.
+set constraints all immediate;
 select 'All fieldwork role/tenant/invitation assertions passed; fixtures rolled back below.' as result;
 rollback;

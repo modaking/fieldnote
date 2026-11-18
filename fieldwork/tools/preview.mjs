@@ -221,8 +221,46 @@ export function sampleDashboard(identity,{p_workspace_id:ws,p_from:from,p_to:to,
   attention.sort((a,b)=>(['danger','warning','info'].indexOf(a.severity)-['danger','warning','info'].indexOf(b.severity))||a.date.localeCompare(b.date)||a.title.localeCompare(b.title));result.attention_count=attention.length;return result;
 }
 
+// Simulated finance responses for invented LOCAL SAMPLE records only. The real
+// calculation/authorization is the SECURITY INVOKER SQL, not these JS helpers.
+export function sampleTransactionTotals(identity,{p_workspace_id:ws,p_from:from,p_to:to,p_farm_id:farm=null,p_filters:filters={}}){
+  const actor=membership(identity,ws),validDay=day=>/^\d{4}-\d{2}-\d{2}$/.test(day||'')&&!Number.isNaN(Date.parse(day+'T12:00:00Z'))&&new Date(day+'T12:00:00Z').toISOString().slice(0,10)===day;
+  if(!actor||!has(actor.role,'finance.read'))throw Object.assign(new Error('Sample financial access is required.'),{status:403});
+  if(!validDay(from)||!validDay(to)||to<=from||(Date.parse(to)-Date.parse(from))/86400000>3660)throw new Error('Choose a valid sample date range.');
+  if(farm&&!tables.farms.some(row=>row.id===farm&&row.workspace_id===ws&&canRead(identity,'farms',row)))throw Object.assign(new Error('Sample farm unavailable.'),{status:403});
+  filters??={};const allowed=['kind','category_id','vendor_id','enterprise_id','source_type','source_id','id','q'];
+  if(typeof filters!=='object'||Array.isArray(filters)||Object.keys(filters).some(k=>!allowed.includes(k)))throw new Error('Choose supported sample filters.');
+  if('kind'in filters&&!['income','expense'].includes(filters.kind)||'source_type'in filters&&filters.source_type!==null&&!['worker_pay','recurring','project'].includes(filters.source_type))throw new Error('Choose a valid sample transaction type.');
+  if('q'in filters&&filters.q!==null&&typeof filters.q!=='string')throw new Error('Enter a text search.');
+  const query=String(filters.q??'').toLowerCase(),reference=(table,id)=>tables[table].find(row=>row.id===id&&row.workspace_id===ws&&canRead(identity,table,row));
+  const rows=tables.transactions.filter(row=>row.workspace_id===ws&&canRead(identity,'transactions',row)&&(!farm||row.farm_id===farm)&&row.txn_date>=from&&row.txn_date<to
+    &&Object.entries(filters).every(([key,value])=>key==='q'||(row[key]??null)===value)).filter(row=>{
+    if(!query)return true;const category=reference('categories',row.category_id),vendor=reference('vendors',row.vendor_id),f=reference('farms',row.farm_id),enterprise=reference('enterprises',row.enterprise_id);
+    return[row.description||'',category?`${category.name} (${category.kind})`:'',vendor?.name||'',f?.name||'',enterprise&&(!farm||enterprise.farm_id===farm)?enterprise.name:''].some(value=>value.toLowerCase().includes(query));
+  });
+  const income=rows.filter(r=>r.kind==='income').reduce((sum,r)=>sum+r.amount_base,0),expenses=rows.filter(r=>r.kind==='expense').reduce((sum,r)=>sum+r.amount_base,0);
+  return{schema_version:'20261118-finance',income,expenses,net:income-expenses,count:rows.length};
+}
+export function sampleFinanceMonth(identity,{p_workspace_id:ws,p_month:period,p_farm_id:farm=null}){
+  if(!/^\d{4}-\d{2}-01$/.test(period||''))throw new Error('Choose the first day of the sample month.');
+  const to=addMonths(period,1),prior=addMonths(period,-1),totals=sampleTransactionTotals(identity,{p_workspace_id:ws,p_from:period,p_to:to,p_farm_id:farm});
+  const visible=name=>tables[name].filter(row=>row.workspace_id===ws&&canRead(identity,name,row)&&(!farm||row.farm_id===farm));
+  const cash=visible('month_closings'),previous=cash.filter(row=>row.month===prior),current=cash.filter(row=>row.month===period),opening=previous.reduce((sum,row)=>sum+row.closing_cash,0);
+  const cats=tables.categories.filter(row=>row.workspace_id===ws&&canRead(identity,'categories',row)),lines=new Map(),key=(id,kind)=>`${id??'null'}|${kind}`;
+  const line=(id,kind)=>{const k=key(id,kind),c=cats.find(c=>c.id===id);if(!lines.has(k))lines.set(k,{id:id??null,kind,name:id==null?'Uncategorised':c?.name||'Unknown category',budget:0,actual:0,can_budget:Boolean(c&&c.kind===kind&&farm&&canWrite(identity,'budgets',{workspace_id:ws,farm_id:farm},'POST'))});return lines.get(k);};
+  for(const c of cats)line(c.id,c.kind);for(const row of visible('transactions').filter(row=>row.txn_date>=period&&row.txn_date<to))line(row.category_id,row.kind).actual+=row.amount_base;
+  for(const row of visible('budgets').filter(row=>row.month===period))line(row.category_id,cats.find(c=>c.id===row.category_id)?.kind||'unknown').budget+=row.amount;
+  const categories=[...lines.values()].map(row=>({...row,variance:row.kind==='expense'?row.budget-row.actual:row.kind==='income'?row.actual-row.budget:null,pct:row.budget?Math.round(row.actual/row.budget*10000)/100:null,over_budget:row.kind==='expense'&&row.budget>0&&row.actual>row.budget}));
+  const sections=Object.fromEntries(['income','expense','unknown'].map(kind=>[kind,{budget:categories.filter(row=>row.kind===kind).reduce((sum,row)=>sum+row.budget,0),actual:categories.filter(row=>row.kind===kind).reduce((sum,row)=>sum+row.actual,0)}]));
+  return{schema_version:'20261118-finance',period:{from:period,to},currency:tables.workspaces.find(w=>w.id===ws).currency,totals:{income:totals.income,expenses:totals.expenses,net:totals.net,opening,calculated_closing:opening+totals.net,saved_closing:current.length?current.reduce((sum,row)=>sum+row.closing_cash,0):null,opening_recorded:previous.length>0},categories,sections};
+}
 async function rpc(req,res,name,identity) {
   const data=await body(req), ws=data.p_workspace_id, actor=membership(identity,ws), fail=(message)=>failure(res,403,message);
+  const tableResult=rows=>{
+    const params=new URL(req.url,'http://127.0.0.1').searchParams,fields=(params.get('order')||'').split(',').filter(Boolean).map(part=>part.split('.'));
+    rows.sort((a,b)=>{for(const[key,direction]of fields){const x=a[key],y=b[key];if(x===y)continue;return(x==null?1:y==null?-1:x<y?-1:1)*(direction==='desc'?-1:1);}return 0;});
+    const offset=Number(params.get('offset')||0),limit=Number(params.get('limit')||1000);return json(res,200,rows.slice(offset,offset+limit));
+  };
   const uid=user(identity).id,profile=tables.profiles.find(p=>p.id===uid),notifications=tables.account_notification_preferences.find(p=>p.user_id===uid)||{user_id:uid,in_app:true,email:false,tasks:true,bills:true,invitations:true};
   const myWorkspaces=()=>tables.workspace_members.filter(m=>m.user_id===uid).map(m=>({...tables.workspaces.find(w=>w.id===m.workspace_id),role:m.role,farm_scope:m.farm_scope}));
   const myInvites=()=>tables.workspace_invites.filter(i=>i.email===user(identity).email&&i.status==='pending'&&new Date(i.expires_at)>new Date());
@@ -243,14 +281,28 @@ async function rpc(req,res,name,identity) {
   }
   if(!actor)return fail('Sample workspace unavailable.');
   if(name==='fw_dashboard'){try{return json(res,200,sampleDashboard(identity,data));}catch(error){return failure(res,error.status||400,error.message);}}
+  if(['fw_transaction_totals','fw_finance_month','fw_close_month'].includes(name)){
+    try{
+      if(name==='fw_transaction_totals')return json(res,200,sampleTransactionTotals(identity,data));
+      let result=sampleFinanceMonth(identity,data);
+      if(name==='fw_close_month'){
+        if(!data.p_farm_id)throw new Error('Choose one sample farm before closing its month.');
+        const row={workspace_id:ws,farm_id:data.p_farm_id,month:data.p_month,closing_cash:result.totals.calculated_closing};
+        if(!canWrite(identity,'month_closings',row,'POST'))return fail('Sample closing permission required.');
+        const old=tables.month_closings.find(r=>r.workspace_id===ws&&r.farm_id===row.farm_id&&r.month===row.month);if(old)Object.assign(old,row);else tables.month_closings.push({...row,id:randomUUID()});
+        result=sampleFinanceMonth(identity,data);
+      }
+      return json(res,200,result);
+    }catch(error){return failure(res,error.status||400,error.message);}
+  }
   if(name==='fw_access_context')return json(res,200,{schema_version:'20261118',role:actor.role,farm_scope:actor.farm_scope,farm_ids:actor.farm_ids||[]});
   if(['fw_operational_workers','fw_operational_projects'].includes(name)) {
     const source=name.endsWith('workers')?'workers':'projects', fields=source==='workers'?['id','workspace_id','farm_id','full_name','role','start_date','end_date','active']:['id','workspace_id','farm_id','name','status','start_date','end_date','notes'];
-    return json(res,200,tables[source].filter((r)=>r.workspace_id===ws&&farmAllowed(actor,r.farm_id)).map((r)=>Object.fromEntries(fields.map((f)=>[f,r[f]??null]))));
+    return tableResult(tables[source].filter((r)=>r.workspace_id===ws&&farmAllowed(actor,r.farm_id)).map((r)=>Object.fromEntries(fields.map((f)=>[f,r[f]??null]))));
   }
   if(!canManageMembers(actor.role))return fail('Only a sample owner or administrator manages team access.');
-  if(name==='fw_list_members')return json(res,200,tables.workspace_members.filter((m)=>m.workspace_id===ws).map((m)=>({...m,full_name:tables.profiles.find((p)=>p.id===m.user_id)?.full_name||'Sample teammate',email:`${m.user_id.replace('preview-','')}@fieldwork.test`})));
-  if(name==='fw_list_invites')return json(res,200,tables.workspace_invites.filter((i)=>i.workspace_id===ws).map(({token,...i})=>i));
+  if(name==='fw_list_members')return tableResult(tables.workspace_members.filter((m)=>m.workspace_id===ws).map((m)=>({...m,full_name:tables.profiles.find((p)=>p.id===m.user_id)?.full_name||'Sample teammate',email:`${m.user_id.replace('preview-','')}@fieldwork.test`})));
+  if(name==='fw_list_invites')return tableResult(tables.workspace_invites.filter((i)=>i.workspace_id===ws).map(({token,...i})=>i));
   const target=tables.workspace_members.find((m)=>m.workspace_id===ws&&m.user_id===data.p_user_id);
   const validate=(oldRole,nextRole,farmIds)=>canManageMember(actor.role,oldRole,nextRole)&&(!['owner','admin'].includes(nextRole)||farmIds==null)&&(!farmIds||farmIds.length>0&&farmIds.every((id)=>tables.farms.some((f)=>f.id===id&&f.workspace_id===ws)));
   if(name==='fw_create_invite') {

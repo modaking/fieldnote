@@ -64,7 +64,7 @@ class Element {
   focus() { this.focused = true; }
 }
 const notifications = new Element(), modalHost = new Element(), timers = [];
-const context = createContext({ console, Intl, Date, crypto: webcrypto, URL, Blob, confirm: () => true,
+const context = createContext({ console, Intl, Date, crypto: webcrypto, URL, URLSearchParams, Blob, confirm: () => true,
   setTimeout: (fn, delay) => { const timer = { fn, delay, cancelled: false }; timers.push(timer); return timer; }, clearTimeout: (timer) => { timer.cancelled = true; },
   document: { body: modalHost, createElement: (tag) => new Element(tag), querySelector: (selector) => selector === '#toasts' ? notifications : null },
   FormData: class { constructor(form) { this.form = form; } *[Symbol.iterator]() { for (const el of this.form.elements) if (el.name && !el.disabled) yield [el.name, el.value]; } },
@@ -96,9 +96,10 @@ function fixture({ role = 'manager', existing = [] } = {}) {
     today: () => '2026-11-18', monthRange: () => ['2026-11-01', '2026-12-01'], dlg: () => dialog,
     db: { select: async (table, query) => {
       calls.push(['select', table, query]);
+      const params=new URLSearchParams(query),page=rows=>rows.slice(Number(params.get('offset')||0),Number(params.get('offset')||0)+Math.min(1000,Number(params.get('limit')||1000)));
       if (table === 'currencies') return ['KES', 'USD', 'JPY'].map((code) => ({ code }));
-      if (table === 'categories') return [{ id: 'expense-cat', name: 'Feed', kind: 'expense' }, { id: 'income-cat', name: 'Sales', kind: 'income' }];
-      if (table === 'transactions') return query.includes('&id=eq.') ? existing.filter((r) => query.includes(`id=eq.${r.id}`)) : existing;
+      if (table === 'categories') return page([{ id: 'expense-cat', name: 'Feed', kind: 'expense' }, { id: 'income-cat', name: 'Sales', kind: 'income' }]);
+      if (table === 'transactions') return page(query.includes('&id=eq.') ? existing.filter((r) => query.includes(`id=eq.${r.id}`)) : existing);
       if (table === 'fx_rates') return [{ rate: 90 }];
       return [];
     }, insert: async (table, payload) => { calls.push(['insert', table, payload]); return payload; },
@@ -269,7 +270,7 @@ test('worker module permissions do not grant enterprise definition writes withou
 test('a farm-scoped manager can edit assigned farms but cannot add or duplicate farms', async () => {
   const f = fixture(); f.X.S.farmIds = ['farm-a'];
   f.X.permissions = { canReadModule: () => true, canWriteModule: () => true, canDeleteModule: () => true };
-  f.X.db.select = async () => [{ id: 'farm-a', name: 'Farm A', workspace_id: 'workspace-a' }];
+  f.X.db.select = async (_table,query) => Number(new URLSearchParams(query).get('offset')||0)?[]:[{ id: 'farm-a', name: 'Farm A', workspace_id: 'workspace-a' }];
   await crud.resource(f.el, f.X, { table: 'farms', module: 'farms', farmScoped: false, title: 'Farms', singular: 'farm', fields: [{ k: 'name', label: 'Name', req: true }], cols: [{ k: 'name', label: 'Name' }] });
   assert.equal(f.el.querySelector('#add'), null);
   assert.ok(f.el.querySelector('#tbl').innerHTML.includes('data-e="farm-a"'));
@@ -277,7 +278,7 @@ test('a farm-scoped manager can edit assigned farms but cannot add or duplicate 
 });
 test('enterprise-linked transactions reject a link on a different farm before saving', async () => {
   const f = fixture(), select = f.X.db.select;
-  f.X.db.select = (table, query) => table === 'enterprises' ? [{ id: 'enterprise-b', name: 'Other farm crops', farm_id: 'farm-b' }] : select(table, query);
+  f.X.db.select = (table, query) => table === 'enterprises' ? Number(new URLSearchParams(query).get('offset')||0)?[]:[{ id: 'enterprise-b', name: 'Other farm crops', farm_id: 'farm-b' }] : select(table, query);
   await crud.resource(f.el, f.X, { ...cfg, refs: [...cfg.refs, 'enterprises'], fields: [...cfg.fields, { k: 'enterprise_id', label: 'Enterprise', type: 'ref', ref: 'enterprises' }] });
   open(f); change(f.dialog, 'amount', '10'); change(f.dialog, 'enterprise_id', 'enterprise-b'); await submit(f.dialog);
   assert.match(f.dialog.querySelector('#rmsg').textContent, /enterprise on the selected farm/);
@@ -394,7 +395,7 @@ test('Workers and Recurring do not post prepared payments after switching accoun
   for(const kind of ['workers','recurring']){
     const f=fixture();let uid='first',release;f.X.uid=()=>uid;f.X.monthLabel=()=> 'November 2026';let inserted=0;
     const waiting=new Promise(resolve=>{release=resolve;});
-    f.X.db.select=async table=>table==='fx_rates'?(await waiting,[{rate:129}]):table==='workers'?[{id:'worker-1',full_name:'A',pay_amount:100,pay_frequency:'monthly',currency:'USD'}]:table==='recurring_payments'?[{id:'recurring-1',name:'Rent',amount:100,day_of_month:1,currency:'USD'}]:[];
+    f.X.db.select=async(table,query)=>Number(new URLSearchParams(query).get('offset')||0)?[]:table==='fx_rates'?(await waiting,[{rate:129}]):table==='workers'?[{id:'worker-1',full_name:'A',pay_amount:100,pay_frequency:'monthly',currency:'USD'}]:table==='recurring_payments'?[{id:'recurring-1',name:'Rent',amount:100,day_of_month:1,currency:'USD'}]:[];
     f.X.db.insertMany=async()=>{inserted++;};
     const resource=async(el,_X,config)=>{el.innerHTML=c.actionMenu({items:config.moreActions||[]});};
     const view=kind==='workers'?await moduleAt('../js/modules.js',{'./crud.js':{resource},'./finance.js':{budget:async()=>{},recurring:async()=>{},CAT:{}}}):await moduleAt('../js/finance.js',{'./crud.js':{resource,minorAmount:crud.minorAmount}});
@@ -408,4 +409,83 @@ test('a checklist run created for the previous account is not followed by a new-
   f.X.db.insert=async()=>{await waiting;return{id:'run-1'};};f.X.db.upsert=async()=>{ticks++;};
   await modules.moduleViews.checklists(f.el,f.X);const checkbox=new Element('input',{type:'checkbox','data-l':'list-1','data-i':'item-1'});checkbox.checked=true;
   const saving=f.el.onchange({target:checkbox});await new Promise(setImmediate);uid='second';release();await saving;assert.equal(ticks,0);assert.equal(f.messages.length,0);
+});
+
+test('a1001-row register and its references load completely even when the server returns only127 rows',async()=>{
+  const f=fixture({existing:Array.from({length:1001},(_,i)=>({id:`tx-${i}`,amount:100,currency:'KES'}))}),select=f.X.db.select;
+  f.X.db.select=async(table,query)=>(await select(table,query)).slice(0,127);
+  await crud.resource(f.el,f.X,{...cfg,summary:rows=>`Complete count ${rows.length}`});
+  assert.match(f.el.querySelector('#pagination').innerHTML,/of 1001 records/);assert.equal(f.el.querySelector('#sum').innerHTML,'Complete count 1001');
+  assert.ok(f.calls.some(([,table,q])=>table==='transactions'&&new URLSearchParams(q).get('offset')==='1001'));
+});
+
+test('a10001-row capped register never presents its loaded subset as a financial total',async()=>{
+  const f=fixture({existing:Array.from({length:10001},(_,i)=>({id:`tx-${i}`,amount:100,currency:'KES'}))});let summed=0;
+  await crud.resource(f.el,f.X,{...cfg,summary:()=>{summed++;return 'Wrong complete total';}});
+  assert.equal(summed,0);assert.match(f.el.querySelector('#sum').innerHTML,/Totals unavailable/);assert.match(f.el.querySelector('#pagination').innerHTML,/First 10,000 loaded/);
+  assert.equal(f.el.querySelector('#csv').textContent,'Export loaded CSV (partial)');
+});
+
+test('a reference beyond the first1000 options remains selected when another field is edited',async()=>{
+  const f=fixture({existing:[{id:'tx',amount:100,currency:'KES',kind:'expense',vendor_id:'vendor-1000'}]}),select=f.X.db.select,vendors=Array.from({length:1001},(_,i)=>({id:`vendor-${i}`,name:`Vendor ${i}`}));
+  f.X.db.select=async(table,query)=>{if(table!=='vendors')return select(table,query);const p=new URLSearchParams(query),offset=Number(p.get('offset')||0);return vendors.slice(offset,offset+Math.min(333,Number(p.get('limit')||1000)));};
+  await crud.resource(f.el,f.X,{...cfg,refs:['vendors'],fields:[...cfg.fields.filter(field=>field.k!=='category_id'),{k:'vendor_id',label:'Vendor',type:'ref',ref:'vendors'}]});
+  await f.el.querySelector('#tbl').onclick({target:new Element('button',{'data-e':'tx'})});assert.equal(f.dialog.querySelector('[name=vendor_id]').value,'vendor-1000');change(f.dialog,'amount','2');await submit(f.dialog);
+  assert.equal(f.calls.find(([type])=>type==='update')[3].vendor_id,'vendor-1000');
+});
+
+test('legacy month closing uses every matching transaction and never leaves a stale Close action after a failed page',async()=>{
+  const finance=await moduleAt('../js/finance.js',{'./crud.js':{resource:async()=>{},minorAmount:crud.minorAmount}});
+  const f=fixture({existing:Array.from({length:1001},(_,i)=>({id:`tx-${i}`,kind:'income',category_id:'income-cat',amount_base:100,currency:'KES'}))});f.X.S.farmId='farm-a';
+  await finance.budget(f.el,f.X);assert.match(f.el.innerHTML,/:100100/);await f.el.onclick({target:new Element('button',{id:'close'})});
+  assert.equal(f.calls.find(([type,table])=>type==='upsert'&&table==='month_closings')[2].closing_cash,100100);
+  const failed=fixture({existing:f.existing}),select=failed.X.db.select;failed.X.S.farmId='farm-a';failed.el.innerHTML='<button id="close">Old close</button>';failed.el.onclick=()=>{throw new Error('Stale close');};
+  failed.X.db.select=async(table,query)=>{if(table==='transactions'&&Number(new URLSearchParams(query).get('offset'))>=1000)throw new Error('Second page failed');return select(table,query);};
+  await assert.rejects(finance.budget(failed.el,failed.X),/Second page failed/);assert.equal(failed.el.querySelector('#close'),null);assert.equal(failed.el.onclick,null);assert.equal(failed.calls.some(([type])=>type==='upsert'),false);
+});
+
+function monthResult(){return{schema_version:'20261118-finance',period:{from:'2026-11-01',to:'2026-12-01'},currency:'KES',totals:{income:123456,expenses:50000,net:73456,opening:1000,calculated_closing:74456,saved_closing:null,opening_recorded:true},categories:[{id:'expense-cat',name:'Feed',kind:'expense',budget:40000,actual:50000,variance:-10000,pct:125,over_budget:true,can_budget:true},{id:'legacy',name:'Legacy category',kind:'unknown',budget:70,actual:0,variance:null,pct:null,over_budget:false,can_budget:false}],sections:{income:{budget:0,actual:123456},expense:{budget:40000,actual:50000},unknown:{budget:70,actual:0}}};}
+test('upgraded budgets render database figures and close atomically without sending a calculated balance',async()=>{
+  const finance=await moduleAt('../js/finance.js',{'./crud.js':{resource:async()=>{},minorAmount:crud.minorAmount}}),f=fixture(),rpc=[];f.X.S.farmId='farm-a';f.X.migrationReady=true;let data=monthResult();
+  f.X.db.select=async()=>{throw new Error('Must not calculate upgraded balances from REST rows');};
+  f.X.db.rpc=async(name,args)=>{rpc.push({name,args});if(name==='fw_close_month')data={...data,totals:{...data.totals,net:80000,calculated_closing:81000,saved_closing:81000}};return data;};
+  await finance.budget(f.el,f.X);assert.match(f.el.innerHTML,/:74456/);assert.match(f.el.innerHTML,/Unclassified records/);assert.equal(f.el.querySelector('[data-c="legacy"]'),null);
+  await f.el.onclick({target:new Element('button',{id:'close'})});const close=rpc.find(call=>call.name==='fw_close_month');assert.equal(close.args.p_month,'2026-11-01');assert.equal('closing_cash' in close.args,false);assert.match(f.el.innerHTML,/:81000/);assert.equal(f.calls.some(([type])=>type==='upsert'),false);
+});
+test('failed upgraded month RPC has no browser-calculated fallback and broader direct ranges cannot close a month',async()=>{
+  const finance=await moduleAt('../js/finance.js',{'./crud.js':{resource:async()=>{},minorAmount:crud.minorAmount}}),f=fixture();f.X.S.farmId='farm-a';f.X.migrationReady=true;
+  f.X.db.rpc=async()=>{throw new Error('Database offline');};await assert.rejects(finance.budget(f.el,f.X),/Database offline/);assert.equal(f.el.querySelector('#close'),null);assert.equal(f.calls.length,0);
+  f.X.monthRange=()=>['2026-09-01','2026-12-01'];f.X.db.rpc=async(_name,args)=>{assert.equal(args.p_month,'2026-11-01');return monthResult();};await finance.budget(f.el,f.X);
+  assert.match(f.el.innerHTML,/November 2026 only/);assert.equal(f.el.querySelector('#close'),null);assert.equal(f.el.querySelector('#copy'),null);
+});
+
+test('pay and recurring posting page both source and posted IDs and use only the selected calendar month',async()=>{
+  const c=await moduleAt('../js/components.js');
+  for(const kind of ['workers','recurring']){
+    const f=fixture(),sources=Array.from({length:1002},(_,i)=>({id:`source-${i}`,full_name:`Worker ${i}`,name:`Payment ${i}`,pay_amount:100,pay_frequency:'monthly',amount:100,currency:'KES',kind:'expense',day_of_month:1})),done=sources.slice(0,1001).map((r,i)=>({id:`posted-${i}`,source_id:r.id})),inserted=[];
+    f.X.monthRange=()=>['2026-09-01','2026-12-01'];f.X.db.select=async(table,query)=>{const p=new URLSearchParams(query),offset=Number(p.get('offset')||0),rows=table==='transactions'?done:['workers','recurring_payments'].includes(table)?sources:[];return rows.slice(offset,offset+Math.min(250,Number(p.get('limit')||1000)));};
+    f.X.db.insertMany=async(_table,rows)=>inserted.push(...rows);const resource=async(el,_X,config)=>{el.innerHTML=c.actionMenu({items:config.moreActions||[]});};
+    const view=kind==='workers'?await moduleAt('../js/modules.js',{'./crud.js':{resource},'./finance.js':{budget:async()=>{},recurring:async()=>{},CAT:{}}}):await moduleAt('../js/finance.js',{'./crud.js':{resource,minorAmount:crud.minorAmount}});
+    await view[kind](f.el,f.X);const button=f.el.querySelector(kind==='workers'?'#post':'#postr');await button.listeners.click({currentTarget:button});assert.equal(inserted.length,1,kind);assert.equal(inserted[0].source_id,'source-1001');assert.equal(inserted[0].source_period,'2026-11-01');assert.equal(inserted[0].txn_date,kind==='workers'?'2026-11-30':'2026-11-01');
+  }
+});
+
+test('database transaction totals follow current filters, cache unchanged views and ignore stale search responses',async()=>{
+  const f=fixture({existing:[{id:'tx',amount:100,currency:'KES',description:'beta'}]}),pending=[];f.X.migrationReady=true;
+  f.X.db.rpc=(name,args)=>new Promise((resolve,reject)=>pending.push({name,args,resolve,reject}));
+  await crud.resource(f.el,f.X,{...cfg,summaryRpc:'fw_transaction_totals',summary:()=>{throw new Error('Do not sum upgraded rows');},search:['description']});
+  for(const value of ['alpha','beta'])f.el.querySelector('#q').oninput({target:{value}});
+  const result=value=>({schema_version:'20261118-finance',income:value,expenses:0,net:value,count:1});pending[2].resolve(result(222));await new Promise(setImmediate);pending[1].resolve(result(111));pending[0].resolve(result(333));await new Promise(setImmediate);
+  assert.match(f.el.querySelector('#sum').innerHTML,/:222/);assert.doesNotMatch(f.el.querySelector('#sum').innerHTML,/:111|:333/);assert.equal(pending[2].args.p_filters.q,'beta');
+  await f.el.querySelector('#tbl').onclick({target:new Element('button',{'data-sort':'amount'})});assert.equal(pending.length,3);
+  f.el.querySelector('#q').oninput({target:{value:'error'}});pending[3].reject(new Error('RPC failed'));await new Promise(setImmediate);assert.match(f.el.querySelector('#sum').innerHTML,/Totals unavailable/);assert.doesNotMatch(f.el.querySelector('#sum').innerHTML,/:222/);
+  f.el.onclick({target:new Element('button',{'data-summary-retry':''})});pending[4].resolve(result(999));await new Promise(setImmediate);assert.match(f.el.querySelector('#sum').innerHTML,/:999/);
+});
+
+test('operational module lists retain all1001 redacted TABLE RPC rows without reading protected base tables',async()=>{
+  const views=await moduleAt('../js/modules.js',{'./crud.js':{resource:crud.resource},'./finance.js':{budget:async()=>{},recurring:async()=>{},CAT:{}}});
+  for(const key of ['workers','infrastructure']){const f=fixture({role:'worker'}),rows=Array.from({length:1001},(_,i)=>({id:`record-${i}`,workspace_id:'workspace-a',farm_id:'farm-a',full_name:`Worker ${i}`,name:`Project ${i}`,role:'field_hand',status:'active',active:true})),calls=[];
+    f.X.migrationReady=true;f.X.permissions={has:()=>false};f.X.db.select=async()=>{throw new Error('Protected base table must not be read');};f.X.db.rpc=async(name,args,query)=>{const p=new URLSearchParams(query),offset=Number(p.get('offset')||0);calls.push({name,args,offset});return rows.slice(offset,offset+Math.min(250,Number(p.get('limit')||1000)));};
+    await views[key](f.el,f.X);assert.match(f.el.querySelector('#pagination').innerHTML,/of 1001 records/);assert.equal(calls.at(-1).offset,1001);assert.equal(calls[0].args.p_workspace_id,'workspace-a');
+  }
 });

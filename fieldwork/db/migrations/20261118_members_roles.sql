@@ -14,6 +14,8 @@
 -- all-farm financial access until an independent ownership/provenance map exists.
 -- Optional transaction.enterprise_id links new financial rows to enterprises;
 -- historical rows remain NULL and are never backfilled or re-attributed here.
+-- Its FK checks at transaction end so farm cascades can finish both SET NULL
+-- actions; immediate workspace/farm/link guards continue to reject invalid edits.
 begin;
 
 create schema if not exists fw_private;
@@ -30,7 +32,20 @@ alter table public.workspace_members add constraint workspace_members_scope_chec
 alter table public.projects add column if not exists budget bigint;
 alter table public.projects drop constraint if exists projects_budget_nonnegative;
 alter table public.projects add constraint projects_budget_nonnegative check (budget is null or budget >= 0);
-alter table public.transactions add column if not exists enterprise_id uuid references public.enterprises(id) on delete set null;
+alter table public.transactions add column if not exists enterprise_id uuid references public.enterprises(id) on delete set null deferrable initially deferred;
+-- A rerun of the earlier proposal may already have its known FK. Change only
+-- that validated enterprise-ID relationship; reject unexpected existing shapes.
+do $$ begin
+  if not exists(select 1 from pg_constraint c
+    join pg_attribute a on a.attrelid=c.conrelid and a.attname='enterprise_id' and not a.attisdropped
+    join pg_attribute parent on parent.attrelid=c.confrelid and parent.attname='id' and not parent.attisdropped
+    where c.conrelid='public.transactions'::regclass and c.conname='transactions_enterprise_id_fkey'
+      and c.contype='f' and c.confrelid='public.enterprises'::regclass and c.conkey=array[a.attnum]
+      and c.confkey=array[parent.attnum] and c.confdeltype='n' and c.convalidated) then
+    raise exception 'Review the existing transactions enterprise foreign key before applying this proposal';
+  end if;
+end $$;
+alter table public.transactions alter constraint transactions_enterprise_id_fkey deferrable initially deferred;
 create index if not exists transactions_enterprise_date on public.transactions(workspace_id,enterprise_id,txn_date);
 
 create table if not exists public.workspace_member_farms (

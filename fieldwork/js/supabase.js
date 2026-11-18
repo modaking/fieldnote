@@ -245,7 +245,10 @@ const first = (rows, action) => {
   return rows[0];
 };
 export const db = {
-  rpc: (name, args = {}) => rest('rpc/' + tableName(name), { method: 'POST', body: args }),
+  rpc: (name, args = {}, query = '') => {
+    const path='rpc/'+tableName(name);if(typeof query!=='string')throw error('Choose valid RPC read options.',400);
+    return rest(path+(query?'?'+new URLSearchParams(query).toString():''),{method:'POST',body:args});
+  },
   select: (table, query = '') => rest(`${tableName(table)}?${query}`),
   insert: async (table, row) => first(await rest(tableName(table), { method: 'POST', body: row, headers: rep }), 'saved'),
   insertMany: (table, rows) => rest(tableName(table), { method: 'POST', body: rows, headers: rep }),

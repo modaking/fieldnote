@@ -1,5 +1,6 @@
 import { pageHeader, field, button, notice, dataTable, actionMenu } from './components.js';
 import { cellText, downloadStatement, PDF_TEXT_NOTE } from './statements.js';
+import {readRpcAll} from './read-all.js';
 
 export const REPORT_MODULES = [
   ['overview','Farm overview'],['daily','Daily operations'],['finances','Financial statement'],['vendors','Vendors and balances'],
@@ -69,6 +70,7 @@ export async function createReport(X,{module='overview',filters={}}={}) {
       if(!Array.isArray(batch))throw new Error('The report received an unexpected record list.');rows.push(...batch.filter((row)=>row.workspace_id===workspace));if(batch.length<1000)break;if(rows.length>100000)throw new Error('This statement is too large. Choose a shorter period.');}
     return rows;
   }
+  const tableRpc=(name,key='id',order=`${key}.asc`)=>readRpcAll(X.db,name,{p_workspace_id:workspace},'',{key,order,active:()=>{alive();return true;}});
   const report={title:REPORT_MODULES.find((item)=>item.key===module).label,currency:base,module,workspaceId:workspace,filters:f,
     letterhead:{workspace:S.ws.name,farm:f.farmId==='all'?'All permitted farms':farmName(f.farmId),period:`${f.from} to ${f.to}`,generatedBy:S.profile?.full_name||S.profile?.email||S.user?.email||uid||'Workspace member',generatedAt:new Date().toISOString(),address:[S.ws.address,S.ws.phone,S.ws.email].filter(Boolean).join(' | ')},sections:[],notes:[]};
   const section=(title,columns,rows,extra={})=>report.sections.push({title,columns,rows,...extra});
@@ -133,7 +135,7 @@ export async function createReport(X,{module='overview',filters={}}={}) {
   }
   if(module==='infrastructure') {
     const finance=capable(X,'finance');
-    let projects=finance?await all('projects','','name.asc,id.asc'):await X.db.rpc('fw_operational_projects',{p_workspace_id:workspace});alive();
+    let projects=finance?await all('projects','','name.asc,id.asc'):await tableRpc('fw_operational_projects','id','name.asc');alive();
     projects=projects.filter((row)=>scoped(row)&&selected(row)&&(!row.start_date||row.start_date<=f.to)&&(!row.end_date||row.end_date>=f.from));
     if(finance)for(const[currency,items]of groupCurrencies(projects))section(`Projects — ${currency}`,[text('name','Project',36),text('farm','Farm',28),text('status','Status',14),date('start_date','Start'),date('end_date','End'),money('budget','Recorded budget',currency,{total:true}),money('cost','Recorded cost',currency,{total:true}),money('remaining','Budget remaining',currency)],items.map((row)=>({...row,farm:farmName(row.farm_id),budget:major(row.budget,currency),cost:major(row.cost,currency),remaining:row.budget==null?null:major(Number(row.budget)-Number(row.cost),currency)})),{totalLabel:'Recorded totals'});
     else section('Operational projects',[text('name','Project',40),text('farm','Farm',30),text('status','Status'),date('start_date','Start'),date('end_date','End'),text('notes','Notes',42)],projects.map((row)=>({...row,farm:farmName(row.farm_id)})));
@@ -157,7 +159,7 @@ export async function createReport(X,{module='overview',filters={}}={}) {
     report.notes.push('Quantities remain separated by enterprise, record type and unit. Repeated observations are not livestock stock balances.');
   }
   if(module==='workers') {
-    const payroll=capable(X,'payroll');let workers=payroll?await all('workers','','full_name.asc,id.asc'):await X.db.rpc('fw_operational_workers',{p_workspace_id:workspace});alive();workers=workers.filter((row)=>scoped(row));
+    const payroll=capable(X,'payroll');let workers=payroll?await all('workers','','full_name.asc,id.asc'):await tableRpc('fw_operational_workers','id','full_name.asc');alive();workers=workers.filter((row)=>scoped(row));
     report.workerOptions=workers.map((row)=>({value:row.id,label:row.full_name}));
     if(f.workerId!=='all'&&!workers.some((row)=>row.id===f.workerId))throw new Error('Choose a worker available to your role and farm scope.');
     workers=workers.filter((row)=>(f.status==='all'||(row.active!==false?'active':'inactive')===f.status)&&(f.workerId==='all'||row.id===f.workerId));
@@ -177,7 +179,7 @@ export async function createReport(X,{module='overview',filters={}}={}) {
   }
   if(module==='members') {
     if(!capable(X,'members'))throw new Error('Member statements require member-management access.');
-    const members=await X.db.rpc('fw_list_members',{p_workspace_id:workspace});alive();
+    const members=await tableRpc('fw_list_members','user_id','created_at.asc');alive();
     section('Workspace membership',[text('full_name','Name',30),text('email','Email',38),text('role','Role',18),text('farm_access','Farm access',38),text('created_at','Joined',27)],members.filter((row)=>f.status==='all'||row.role===f.status).map((row)=>({...row,farm_access:row.farm_scope==='farms'?(row.farm_ids||[]).map(farmName).join(', ')||'No farms assigned':'All workspace farms'})));
     report.notes.push('Member names, email addresses and farm access are included only for workspace owners and administrators.');
   }

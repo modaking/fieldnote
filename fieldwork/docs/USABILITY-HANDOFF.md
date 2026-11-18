@@ -2,8 +2,9 @@
 
 Updated 18 November 2026 for the existing `modaking/fieldnote` repository, baseline
 `c2de1a45eaad97d76228e007917aa3bd8cd0587e`. This is a reviewable working draft.
-**No production schema, RLS or data writes were made. All three migrations remain
-unapplied; their rollback-only SQL suites have not been executed.**
+**All three migrations remain uninstalled. All three SQL suites passed
+in an authorized rollback-only rehearsal on the current project; no schema, RLS
+or fixture rows were retained, including after the finance-extended run.**
 
 ## Preservation and navigation
 
@@ -30,7 +31,7 @@ browser history and context guards preserve the selected section and scope.
 | Files | Responsibility |
 | --- | --- |
 | `js/app.js`, `js/navigation.js`, `js/navigation-ui.js` | Context, five-page registry, sections, search, Settings and onboarding |
-| `js/modules.js`, `js/finance.js`, `js/crud.js` | Existing records, 14 business views, tables/forms and money workflows |
+| `js/modules.js`, `js/finance.js`, `js/crud.js`, `js/read-all.js` | Existing records, 14 business views, tables/forms, complete paged reads and money workflows |
 | `js/components.js`, `js/feedback.js`, `css/*.css` | Shared controls, themes, responsive layout, validation and unsaved/save guards |
 | `js/auth-ui.js`, `js/supabase.js` | Password/email/Google flows, PKCE, refresh and checked RPC requests |
 | `js/permissions.js`, `js/members.js` | Interface permissions and checked team actions |
@@ -65,26 +66,39 @@ browser history and context guards preserve the selected section and scope.
   dirty/save guards and context-safe retries. Delete waits six seconds for Undo
   before the request; Undo cannot restore deleted records or reverse cascades.
   Table loads visibly cap at 10,000 rows; statements paginate separately.
+  Farm/reference/financial reads cross the REST page cap, with explicit errors
+  rather than partial complete totals. The proposed finance RPCs compute filtered
+  totals, preserve uncategorised/category-kind mismatch amounts and recompute a
+  selected farm's month close in PostgreSQL before saving it.
 - Ten statements cover Overview, Operations, Finances, Vendors, Infrastructure,
   Livestock & crops, Workers, Funding, Members and Audit. PDF has letterhead,
   sections/totals, repeated headings and page counts. XLSX has section sheets,
   numeric formats, frozen headers and SUM totals. PDF fonts transliterate accents
   and replace unsupported characters with `?`; preview/XLSX retain Unicode.
 
-## Database proposals — staging first
+## Database proposals and completed rehearsal
 
-Do not rerun `db/schema.sql` over the existing project. Review these additive
-files on isolated staging, then run their rollback-only suites:
+Do not rerun `db/schema.sql` over the existing project. These additive proposals
+and suites were exercised in the reviewed rollback batch; permanent installation
+remains a separate decision:
 
-| Migration | Purpose | Staging suite |
+| Migration | Purpose | SQL suite |
 | --- | --- | --- |
 | `db/migrations/20261118_members_roles.sql` | Six roles/farm scope, checked invites/members, audit scope, project budgets, bills and enterprise links | `db/tests/20261118_members_roles.test.sql` |
-| `db/migrations/20261118_dashboard.sql` | RLS-bound security-invoker aggregates and exact-month saved cash | `db/tests/20261118_dashboard.test.sql` |
+| `db/migrations/20261118_dashboard.sql` | RLS-bound security-invoker dashboard/finance aggregates, exact-month saved cash and checked farm month close | `db/tests/20261118_dashboard.test.sql` |
 | `db/migrations/20261118_account.sql` | Own preferences/private avatars/sessions/invites, opt-in MFA and leave/delete safeguards | `db/tests/20261118_account.test.sql` |
 
-**None is applied or PostgreSQL-executed.** Role/two-workspace/farm-scope and
-concurrency behavior is source-reviewed, not database-proven. Existing live
-policies remain unchanged.
+**None is installed.** The members/roles, dashboard/finance and Account suites
+passed against the actual current project in one reviewed transaction, using
+savepoints to isolate each suite's fixtures, then a final rollback. The catalog
+returned to all **1,299 baseline items / MD5
+`992fc360118daa1d8f2398d90ba4f75b`**, and the scan of 25 fixture prefixes found no
+remaining IDs. The latest run also passed complete 1,005-row finance aggregates,
+server-recomputed month close and role/farm-scope rejections. Normal logs and
+audit identity sequence gaps can survive rollback; no sequence was reset.
+This single-connection rehearsal does not prove
+concurrent-session behavior or real Auth/HTTP flows. Existing live policies remain
+unchanged.
 
 Review the behavior changes: Worker loses legacy finance/pay/audit reads and
 transaction writes. Owner/Admin manage access (only Owner manages owners/admins);
@@ -114,9 +128,10 @@ node --experimental-vm-modules --test tests/*.test.mjs db/tests/*.test.mjs
 node tools/preview.mjs
 ```
 
-Latest full JavaScript run: **178 tests pass**. Static checks pass for **21 browser
+Latest full JavaScript run: **214 tests pass**. Static checks pass for **22 browser
 modules, two API handlers, 12 business routes, five pages, 16 sections and 12
-assets**. These checks do not execute SQL or prove live Auth/RLS enforcement.
+assets**. These JavaScript checks are separate from the rollback-only SQL results
+above and do not prove real Auth or browser/REST end-to-end enforcement.
 Configured contrast checks pass all 32 pairs in each theme with zero failures.
 
 The local preview uses invented in-memory data and simulated SQL/permissions.
@@ -135,22 +150,30 @@ retains the form and Save shows confirmation. Farm filtering, income drill-throu
 row-detail drawers, mobile More/filters sheets and Account tab back navigation
 were checked. These are sample-preview checks, not physical-device verification.
 
+The final sample Budget check recorded Close month with a saved balance and toast,
+Copy showed the no-prior-budget feedback, and Report opened its finance statement.
+Transaction Add/search worked. Opening/cancelling Filters preserved an invalid
+budget edit and the later discard prompt; Cancel kept the value. Budgets had no
+horizontal overflow at all four widths in both themes. Module headers retain
+their original event/query scope through rerenders, including legacy tab views.
+
 Browser PDF/true-XLSX downloads succeeded; the downloaded files were parsed with
 pypdf/openpyxl, including numeric cells, frozen headers and SUM formulas. PDF was
 also rendered with Poppler. Chart PNG/CSV downloaded; PNG was viewed and valid.
 Chart table mode showed exact amounts in mobile cards. Desktop Excel/PDF-reader
 opening remains unverified.
 
-Browser access verified account `kirubiianmwangi-crypto`, project **Fieldnote**
-(`nwuyizxxtfrncigorfji`): read-only metadata showed 24 original public tables and
-six inspected core RLS flags enabled. The connected tool still points to the older
-`pollwave` account; do not confuse it with the farm project. No live row or policy
-was changed.
+The current project's 44 anonymous/nonmember read-only checks passed separately
+from the fixture-based SQL rehearsal. Original schema, policies and fixture-row
+absence were verified after rollback; no proposed migration remains installed.
+Detailed project configuration checks are retained privately outside this public
+handoff.
 
 ## Ian's remaining release checks
 
-1. Review/install proposals only on isolated staging, run all three SQL suites,
-   and test direct REST access for six roles, two workspaces and restricted farms.
+1. Review the proposals and deployment plan before any permanent installation;
+   verify direct REST/browser flows for six roles, two workspaces and restricted farms.
+   The successful current-project rollback rehearsal did not install the upgrades.
    Reconcile dashboard/report figures, source posting, budgets and saved cash.
 2. Verify real email/verification/recovery/magic links, Google redirects/linking/
    removal, TOTP enrollment/challenge/removal, session revocation, invitation

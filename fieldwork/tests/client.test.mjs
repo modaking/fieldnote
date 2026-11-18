@@ -359,6 +359,13 @@ test('RPCs use authenticated JSON POST and validate function names before sendin
   assert.equal(c.calls.length, 1);
 });
 
+test('TABLE RPC pagination stays in the URL while POST arguments and scalar RPC URLs remain unchanged',async()=>{
+  const c=await client();c.respond(()=>reply([{user_id:'member'}]));const args={p_workspace_id:'workspace-a'};
+  await c.db.rpc('fw_list_members',args,'order=created_at.asc,user_id.asc&limit=1000&offset=333');const request=c.calls[0],url=new URL(request.url);
+  assert.equal(request.method,'POST');assert.equal(url.pathname,'/rest/v1/rpc/fw_list_members');assert.equal(url.searchParams.get('offset'),'333');assert.equal(url.searchParams.get('order'),'created_at.asc,user_id.asc');assert.deepEqual(JSON.parse(request.body),args);
+  await c.db.rpc('fw_dashboard',args);assert.equal(new URL(c.calls[1].url).search,'');assert.throws(()=>c.db.rpc('fw_list_members',args,{}),{status:400});assert.equal(c.calls.length,2);
+});
+
 test('an earlier password sign-in cannot replace a newer account', async () => {
   const c=await client({stored:null});const replies=new Map();
   c.respond(({body})=>new Promise(resolve=>replies.set(JSON.parse(body).email,resolve)));

@@ -11,17 +11,19 @@ export async function renderSectionPage(el,X,nav,views,members){
   const section=SECTIONS.find(item=>item.id===nav.section);
   if(!section)return;
   el.innerHTML=`<div id="section-heading">${C.pageHeader({title:section.label})}</div>${sectionControls(nav.page,nav.section,X)}<div id="section-content"></div>`;
-  const box=el.querySelector('#section-content'),heading=el.querySelector('#section-heading');
+  const box=el.querySelector('#section-content'),heading=el.querySelector('#section-heading'),navigation=el.querySelector('.section-navigation');
   el.querySelectorAll('[data-tab],[data-section]').forEach(button=>{button.onclick=()=>{location.hash=sectionURL(button.dataset.section||button.dataset.tab);};});
   el.querySelector('[data-section-select]')?.addEventListener('change',event=>{location.hash=sectionURL(event.target.value);});
-  const moveHeader=()=>{const header=box.querySelector('.ui-page-header');if(header)heading.replaceChildren(header);};
-  const observer=new MutationObserver(()=>{if(!el.isConnected){observer.disconnect();return;}moveHeader();});observer.observe(box,{childList:true});
+  // Keep the header in its module's event/query scope. Move the existing section
+  // controls instead; retain their listeners when a module replaces its content.
+  const placeNavigation=()=>{const header=box.querySelector('.ui-page-header');heading.hidden=Boolean(header);const anchor=header||heading;if(navigation&&anchor.nextElementSibling!==navigation)anchor.after(navigation);};
+  const observer=new MutationObserver(()=>{if(!el.isConnected){observer.disconnect();return;}placeNavigation();});observer.observe(box,{childList:true,subtree:true});
   const life=new MutationObserver(()=>{if(!el.isConnected){observer.disconnect();life.disconnect();}});if(el.parentElement)life.observe(el.parentElement,{childList:true});
   const local={...X,pageTitle:section.label,section:section.id};
   if(section.id==='members'||section.id==='invitations')await members(box,local,{tab:section.id==='invitations'?'invites':'members',hideTabs:true});
   else if(views[section.id])await views[section.id](box,local);
   else box.innerHTML=C.notice({title:'This section is being prepared',text:'The existing module link is still available.',tone:'warning'});
-  moveHeader();
+  placeNavigation();
 }
 
 export async function openCommandPalette(X){

@@ -2,6 +2,7 @@ import { resource } from './crud.js';
 import { budget, recurring, CAT } from './finance.js';
 import * as C from './components.js';
 import { registerUnsaved, confirmLeave } from './feedback.js';
+import { readAll, readRpcAll, calendarMonth } from './read-all.js';
 
 const reportAction = (X, key) => typeof X.report === 'function' && (!X.canReport || X.canReport(key)) ? C.actionMenu({label:'More actions',text:'More actions',items:[{label:'Report',attrs:{'data-module-report':key}}]}) : '';
 const bindReports = (el, X) => el.querySelectorAll('[data-module-report]').forEach((button) => button.addEventListener('click', () => X.report(button.dataset.moduleReport)));
@@ -10,18 +11,25 @@ const tabs = async (el, X, list, initial = 0, notice = '') => {     // list: [[l
   const requested=String(X.filters?.tab||'').toLowerCase(),aliases={budget:'budget vs actual',payroll:'post pay',bills:'bills & balances',records:'records',checklists:'checklists',recurring:'recurring',categories:'categories',transactions:'transactions',enterprises:'enterprises',workers:'workers'};
   const requestedIndex=list.findIndex(([label])=>label.toLowerCase()===(aliases[requested]||requested)||label.toLowerCase().replace(/[^a-z0-9]+/g,'-')===requested);if(requestedIndex>=0)initial=requestedIndex;
   el.innerHTML = '<div id="module-heading"></div>' + notice + C.tabs(list.map(([label]) => ({ label })), { active: initial }) + '<div id="tabbox"></div>';
+  const controls=el.querySelector('.subtabs'),heading=el.querySelector('#module-heading');
   let headerObserver,activeTab=null,switchSequence=0;
-  const go = async (i) => {const my=++switchSequence;if(activeTab!==null&&activeTab!==i&&!(await confirmLeave()))return;if(my!==switchSequence)return;activeTab=i;headerObserver?.disconnect(); el.querySelectorAll('.subtabs button').forEach((b) => { b.setAttribute('aria-selected', String(b.dataset.i == i)); b.tabIndex = b.dataset.i == i ? 0 : -1; });
+  const go = async (i) => {const my=++switchSequence;if(activeTab!==null&&activeTab!==i&&!(await confirmLeave()))return;if(my!==switchSequence)return;activeTab=i;headerObserver?.disconnect(); controls.querySelectorAll('button').forEach((b) => { b.setAttribute('aria-selected', String(b.dataset.i == i)); b.tabIndex = b.dataset.i == i ? 0 : -1; });
+    heading.replaceChildren();heading.hidden=true;
     const box = document.createElement('div'); box.setAttribute('role', 'tabpanel'); el.querySelector('#tabbox').replaceChildren(box);
-    const elevateHeader = () => { const header = box.querySelector('.ui-page-header'); if (header && box.isConnected) el.querySelector('#module-heading')?.replaceChildren(header); };
-    if (typeof MutationObserver !== 'undefined') { headerObserver = new MutationObserver(elevateHeader); headerObserver.observe(box, { childList: true }); }
+    // Keep actions inside their module's event boundary. Reuse the tab controls
+    // after each render rather than moving the module header outside its panel.
+    const placeControls = () => { if(!box.isConnected)return;const header=box.querySelector('.ui-page-header');
+      if(header){heading.hidden=true;if(header.nextElementSibling!==controls)header.after(controls);}
+      else if(box.firstElementChild!==controls)box.prepend(controls);
+    };
+    if (typeof MutationObserver !== 'undefined') { headerObserver = new MutationObserver(placeControls); headerObserver.observe(box, { childList: true,subtree:true }); }
     box.innerHTML = C.skeletonRows();
-    try { await list[i][1](box); elevateHeader(); }
-    catch (e) { if (box.isConnected) { el.querySelector('#module-heading').innerHTML = C.pageHeader({ title: X.pageTitle || list[i][0], description: X.pageDescription || '', actions: reportAction(X, X.S.route || 'overview') }); bindReports(el.querySelector('#module-heading'), X); } box.innerHTML = C.emptyState({ title: 'This section couldn’t load', text: e.message, action: C.button({ label: 'Try again', variant: 'secondary' }) }); box.querySelector('button').onclick = () => go(i); } };
-  el.querySelector('.subtabs').onclick = (e) => { const button = e.target.closest('button[data-i]'); if (button) go(Number(button.dataset.i)); };
-  el.querySelector('.subtabs').onkeydown = (event) => { const current = Number(event.target.dataset.i); if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || !Number.isInteger(current)) return;
+    try { await list[i][1](box); placeControls(); }
+    catch (e) { if (box.isConnected) { heading.hidden=false;heading.innerHTML = C.pageHeader({ title: X.pageTitle || list[i][0], description: X.pageDescription || '', actions: reportAction(X, X.S.route || 'overview') }); bindReports(heading, X); } box.innerHTML = C.emptyState({ title: 'This section couldn’t load', text: e.message, action: C.button({ label: 'Try again', variant: 'secondary' }) }); box.querySelector('button').onclick = () => go(i);placeControls(); } };
+  controls.onclick = (e) => { const button = e.target.closest('button[data-i]'); if (button) go(Number(button.dataset.i)); };
+  controls.onkeydown = (event) => { const current = Number(event.target.dataset.i); if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) || !Number.isInteger(current)) return;
     event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? list.length - 1 : (current + (event.key === 'ArrowRight' ? 1 : -1) + list.length) % list.length;
-    el.querySelectorAll('.subtabs button')[next].focus(); go(next); };
+    controls.querySelectorAll('button')[next].focus(); go(next); };
   await go(initial);
 };
 
@@ -54,8 +62,8 @@ async function checklists(box, X) {
   const fq = farm ? `farm_id=eq.${farm}` : 'farm_id=is.null';
   const load = async () => {
     if(!current())return;
-    const [loadedLists, runs] = await Promise.all([db.select('checklists', `${scope}&select=id,name,checklist_items(id,label,position)&order=name`),
-      db.select('checklist_runs', `${scope}&select=id,checklist_id,checklist_run_items(item_id,done)&run_date=eq.${today}&${fq}`)]);
+    const [loadedLists, runs] = await Promise.all([readAll(db,'checklists', `${scope}&select=id,name,checklist_items(id,label,position)&order=name`,{active:current}),
+      readAll(db,'checklist_runs', `${scope}&select=id,checklist_id,checklist_run_items(item_id,done)&run_date=eq.${today}&${fq}`,{active:current})]);
     if(!current())return;
     const lists = loadedLists.filter((row) => !pendingTemplates.has(row.id));
     box.innerHTML = C.pageHeader({ title: 'Checklists', description: 'Small routines that keep the farm running.', actions: reportAction(X, 'daily') + (templates ? C.button({ label: 'Add checklist', attrs: { id: 'newcl' } }) : '') }) + `${S.farmId === 'all' ? C.notice({ text: S.farmIds != null ? 'Choose an assigned farm to tick its checklist items.' : 'Showing shared ticks for all farms. Pick a farm tab to tick items for one farm.' }) : ''}
@@ -131,6 +139,7 @@ export const daily = (el, X) => tabs(el, X, [['Tasks', (b) => resource(b, X, TAS
 /* ── Monthly finances ── */
 const STD = { income: ['Milk sales', 'Crop sales', 'Livestock sales', 'Other income'], expense: ['Feed', 'Seed', 'Fertiliser', 'Agrochemicals', 'Veterinary', 'Labour', 'Fuel', 'Repairs', 'Transport', 'Utilities', 'Other'] };
 const TXN = { table: 'transactions', title: 'Transactions', singular: 'transaction', icon: 'finances', workerWrite: true, multi: true, fx: true, monthField: 'txn_date', order: 'txn_date.desc',
+  summaryRpc:'fw_transaction_totals',
   refs: ['categories', 'vendors'], search: ['description'], emptyTitle: 'No transactions this month', emptyText: 'Record income and expenses as they happen. Pick another month above to see past records.',
   fields: [{ k: 'txn_date', label: 'Date', type: 'date', req: true, def: (X) => X.today?.() || new Date().toISOString().slice(0, 10) }, { k: 'kind', label: 'Type', type: 'select', req: true, options: ['expense', 'income'] },
     { k: 'amount', label: 'Amount', type: 'money', req: true }, { k: 'category_id', label: 'Category', type: 'ref', ref: 'categories' }, { k: 'vendor_id', label: 'Vendor', type: 'ref', ref: 'vendors' }, { k: 'description', label: 'Description' }],
@@ -157,9 +166,9 @@ const VEND = { table: 'vendors', title: 'Vendors', singular: 'vendor', icon: 've
   fields: [{ k: 'name', label: 'Name', req: true }, { k: 'kind', label: 'What they supply' }, { k: 'phone', label: 'Phone', type: 'tel' }, { k: 'email', label: 'Email', type: 'email' }, { k: 'notes', label: 'Notes', type: 'textarea' }],
   cols: [{ k: 'name', label: 'Name' }, { k: 'kind', label: 'Supplies' }, { k: 'phone', label: 'Phone' }, { k: 'farm_id', label: 'Farm', t: 'farms' }] };
 async function merchants(box, X) {
-  const { db, S, esc, toast } = X; const list = await db.select('seed_merchants', 'order=name');
+  const { db, S, esc, toast } = X,workspace=S.ws.id,actor=X.uid?.(),active=()=>S.ws?.id===workspace&&(!actor||X.uid?.()===actor)&&box.isConnected!==false;const list=await readAll(db,'seed_merchants','order=name',{active});
   if (!list.length) { box.innerHTML = C.pageHeader({ title: 'Seed merchants', actions: reportAction(X, 'vendors') }) + C.emptyState({ icon: X.I('vendors'), title: 'Seed merchant list not loaded', text: 'Ask a workspace admin to add the current registered merchant list.' }); bindReports(box, X); return; }
-  const workspace = S.ws.id, mine = new Set((await db.select('vendors', `workspace_id=eq.${workspace}&select=seed_merchant_id&seed_merchant_id=not.is.null`)).map((v) => v.seed_merchant_id));
+  const mine = new Set((await readAll(db,'vendors', `workspace_id=eq.${workspace}&select=id,seed_merchant_id&seed_merchant_id=not.is.null`,{active})).map((v) => v.seed_merchant_id));
   box.innerHTML = C.pageHeader({ title: 'Seed merchants', description: 'Find registered seed suppliers and add them to your directory.', actions: reportAction(X, 'vendors') }) + `<div class="ui-resource-toolbar">${C.input({ id: 'mq', type: 'search', attrs: { placeholder: 'Search merchants or county', 'aria-label': 'Search merchants' } })}</div><div class="ui-table-scroller" id="mt"></div>`;
   bindReports(box, X);
   const paint = (q = '') => { box.querySelector('#mt').innerHTML = C.dataTable({ columns: [{ key: 'name', label: 'Merchant' }, { key: 'county', label: 'County' }, { key: 'licence_no', label: 'Licence' }], rows: list.filter((m) => `${m.name} ${m.county}`.toLowerCase().includes(q)),
@@ -186,9 +195,10 @@ const PROJ = { table: 'projects', title: 'Infrastructure', singular: 'project', 
     { k: 'remaining', label: 'Budget remaining', sortValue: (r) => r.budget == null ? null : r.budget - r.cost, render: (r, X) => r.budget == null ? '—' : `<span class="${r.cost > r.budget ? 'neg' : 'pos'}">${X.money(r.budget - r.cost, r.currency)}</span>` }],
   filters: [{ k: 'status', label: 'Status', options: ['planned', 'active', 'paused', 'done'] }] };
 export const infrastructure = (el, X) => {
+  const workspace=X.S.ws.id,actor=X.uid?.(),active=()=>el.isConnected!==false&&X.S.ws?.id===workspace&&(!actor||X.uid?.()===actor);
   const config = X.migrationReady ? PROJ : { ...PROJ, fields: PROJ.fields.filter((f) => f.k !== 'budget'), cols: PROJ.cols.filter((c) => !['budget', 'remaining'].includes(c.k)) };
   return resource(el, X, (X.permissions?.has?.('finance.read') ?? true) ? config : { ...config, module: 'infrastructure', multi: false,
-    load: () => X.db.rpc('fw_operational_projects', { p_workspace_id: X.S.ws.id }), fields: config.fields.filter((f) => !['cost', 'budget'].includes(f.k)), cols: config.cols.filter((c) => !['cost', 'budget', 'remaining'].includes(c.k)) });
+    load: () => readRpcAll(X.db,'fw_operational_projects',{p_workspace_id:workspace},'',{order:'name.asc',active}), fields: config.fields.filter((f) => !['cost', 'budget'].includes(f.k)), cols: config.cols.filter((c) => !['cost', 'budget', 'remaining'].includes(c.k)) });
 };
 
 /* ── Livestock & crops ── */
@@ -215,13 +225,13 @@ const WORK = { table: 'workers', title: 'Workers', singular: 'worker', icon: 'wo
   filters: [{ k: 'role', label: 'Role', options: ROLES }] };
 export async function workers(el, X) {
   const { S, db, toast } = X, workspace = S.ws.id, scope = `workspace_id=eq.${workspace}`, base = S.ws.currency;
-  const actor=X.uid?.(),current=()=>S.ws?.id===workspace&&(!actor||X.uid?.()===actor)&&X.canWrite();
-  el.innerHTML = `${X.canWrite() ? C.notice({ title: `Record ${X.monthLabel()} wages`, text: 'Use More actions to post pay. Weekly pay counts 4 weeks and daily pay 26 days. Previously posted payments are skipped.' }) : ''}<div id="wk"></div>`;
+  const selectedMonth=S.month,selectedFarm=S.farmId,period=calendarMonth(selectedMonth),actor=X.uid?.(),current=()=>S.ws?.id===workspace&&S.month===selectedMonth&&S.farmId===selectedFarm&&(!actor||X.uid?.()===actor)&&X.canWrite(),all=(table,query)=>readAll(db,table,query,{active:current});
+  el.innerHTML = `${X.canWrite() ? C.notice({ title: `Record ${period.label} wages`, text: `Use More actions to post ${period.label} only. Weekly pay counts 4 weeks and daily pay 26 days. Previously posted payments are skipped.` }) : ''}<div id="wk"></div>`;
   const postPay=async (event) => {
     const button = event.currentTarget; if (button.disabled || !current()) return; button.disabled = true;
     try {
-      const [a, b] = X.monthRange(), last = new Date(new Date(b).getTime() - 864e5).toISOString().slice(0, 10), fq = S.farmId === 'all' ? '' : `&farm_id=eq.${S.farmId}`;
-      const [ws, done, cat] = await Promise.all([db.select('workers', `${scope}&active=eq.true&pay_amount=gt.0${fq}`), db.select('transactions', `${scope}&select=source_id&source_type=eq.worker_pay&source_period=eq.${a}`),
+      const a=period.from,b=period.to,last=new Date(new Date(b).getTime()-864e5).toISOString().slice(0,10),fq=selectedFarm==='all'?'':`&farm_id=eq.${selectedFarm}`;
+      const [ws, done, cat] = await Promise.all([all('workers', `${scope}&active=eq.true&pay_amount=gt.0${fq}`), all('transactions', `${scope}&select=id,source_id&source_type=eq.worker_pay&source_period=eq.${a}`),
         db.select('categories', `${scope}&select=id&kind=eq.expense&name=eq.Labour&limit=1`)]);
       const posted = new Set(done.map((d) => d.source_id)), rows = [], skipped = [];
       for (const w of ws.filter((w) => !posted.has(w.id) && (!w.start_date || w.start_date < b) && (!w.end_date || w.end_date >= a))) {
@@ -238,8 +248,8 @@ export async function workers(el, X) {
       toast(`${rows.length} payment${rows.length === 1 ? '' : 's'} posted${skipped.length ? `. No exchange rate for ${skipped.join(', ')}` : ''}${!rows.length && !skipped.length ? ' (all already posted)' : ''}`);
     } catch (x) {if(current())toast(x.message);} finally { button.disabled = false; } };
   const pay = X.permissions?.has?.('pay.read') ?? true;
-  await resource(el.querySelector('#wk'), X, pay ? {...WORK,moreActions:X.canWrite()?[{label:`Post ${X.monthLabel()} pay`,attrs:{id:'post'}}]:[]} : { ...WORK, module: 'workers', multi: false,
-    load: () => X.db.rpc('fw_operational_workers', { p_workspace_id: workspace }), search: ['full_name', 'role'],
+  await resource(el.querySelector('#wk'), X, pay ? {...WORK,moreActions:X.canWrite()?[{label:`Post ${period.label} pay`,attrs:{id:'post'}}]:[]} : { ...WORK, module: 'workers', multi: false,
+    load: () => readRpcAll(X.db,'fw_operational_workers',{p_workspace_id:workspace},'',{order:'full_name.asc',active:()=>el.isConnected!==false&&S.ws?.id===workspace&&(!actor||X.uid?.()===actor)}), search: ['full_name', 'role'],
     fields: WORK.fields.filter((f) => !['pay_amount', 'pay_frequency', 'phone'].includes(f.k)), cols: WORK.cols.filter((c) => !['pay_amount', 'pay_frequency'].includes(c.k)) });
   el.querySelector('#post')?.addEventListener('click',postPay);
   const header = el.querySelector('.ui-page-header'); if (header) el.prepend(header);
