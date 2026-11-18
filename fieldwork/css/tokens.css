@@ -15,7 +15,7 @@
 
   --text:          #1D2A22;
   --text-muted:    #56635A;
-  --text-faint:    #6B766E;
+  --text-faint:    #56635A;
 
   --primary:       #1F4D36;
   --primary-hover: #17402B;
@@ -96,6 +96,8 @@
   --fs-xs: .75rem; --fs-sm: .875rem; --fs-md: 1rem; --fs-lg: 1.25rem; --fs-xl: 1.75rem; --fs-2xl: 2.25rem;
   --lh-body: 1.55; --lh-tight: 1.2;
   --fw-regular: 400; --fw-medium: 500; --fw-bold: 650;
+  --type-page: 2rem; --type-section: 1.25rem; --type-card: 1.125rem;
+  --type-body: 1rem; --type-table: .875rem; --type-caption: .75rem;
 
   --sp-1: .25rem; --sp-2: .5rem; --sp-3: .75rem; --sp-4: 1rem;
   --sp-5: 1.5rem; --sp-6: 2rem; --sp-7: 3rem;

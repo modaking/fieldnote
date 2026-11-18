@@ -1,11 +1,12 @@
 // Demo workspace loader: 2 farms, 4 workers, 1 seed purchase, 4 checklists, plus enough records to fill every module.
 // Runs as the signed-in owner/manager through normal RLS. Amounts assume a KES base currency (minor units = x100).
 export async function loadDemo(X) {
+  if (X.S.ws.currency !== 'KES') throw new Error('The sample records require a Kenyan-shilling workspace.');
   const { S, db } = X, ws = S.ws.id, k = (n) => n * 100, m = S.month, day = (d) => `${m}-${String(d).padStart(2, '0')}`;
   const farms = await db.insertMany('farms', [{ workspace_id: ws, name: 'Ol Kalou', county: 'Nyandarua', location_text: 'Ol Kalou, off the Nyahururu road' },
     { workspace_id: ws, name: 'Mashuru', county: 'Kajiado', location_text: 'Mashuru, near the Kajiado–Makueni boundary' }]);
   const [ok, ma] = farms.map((f) => f.id);
-  let cats = await db.select('categories', 'select=id,name');
+  let cats = await db.select('categories', `workspace_id=eq.${ws}&select=id,name`);
   if (!cats.length) cats = await db.insertMany('categories', [...['Milk sales', 'Crop sales', 'Livestock sales', 'Other income'].map((name) => ({ workspace_id: ws, kind: 'income', name })),
     ...['Feed', 'Seed', 'Fertiliser', 'Agrochemicals', 'Veterinary', 'Labour', 'Fuel', 'Repairs', 'Transport', 'Utilities', 'Other'].map((name) => ({ workspace_id: ws, kind: 'expense', name }))]);
   const cat = (n) => cats.find((c) => c.name === n)?.id ?? null;

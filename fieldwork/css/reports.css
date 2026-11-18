@@ -1,0 +1,66 @@
+/* Statement UI uses the same green/cream tokens as the rest of fieldwork. */
+.ui-report-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+  margin-bottom: var(--sp-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  align-items: end;
+}
+.ui-report-filters .field { margin-bottom: 0; min-width: 0; }
+.ui-report-filters{grid-template-columns:minmax(220px,1fr) auto auto;align-items:center;padding:var(--sp-4);border:0;box-shadow:none}
+.ui-report-advanced{min-width:0}.ui-report-advanced summary{cursor:pointer;min-height:44px;display:flex;align-items:center;padding:var(--sp-2);color:var(--text-muted)}
+.ui-report-advanced[open]{grid-column:1/-1}.ui-report-advanced-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:var(--sp-3);padding-block:var(--sp-3)}
+.ui-report-filters input, .ui-report-filters select { min-width: 0; width: 100%; }
+.ui-report-filters > .btn { align-self: end; margin-bottom: 1.25rem; }
+.ui-report-actions { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-3); }
+#statement-preview { min-width: 0; margin-top: var(--sp-5); }
+.ui-statement {
+  min-width: 0;
+  padding: var(--sp-6);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+}
+.ui-statement-letterhead { border-bottom: 2px solid var(--primary); padding-bottom: var(--sp-5); margin-bottom: var(--sp-6); }
+.ui-statement-letterhead .ui-statement-workspace { font-family: var(--font-display); font-size: var(--fs-xl); font-weight:var(--fw-bold); color: var(--primary); margin-bottom: var(--sp-2); }
+.ui-statement-letterhead p { margin: var(--sp-1) 0; overflow-wrap: anywhere; }
+.ui-statement-section { margin: var(--sp-6) 0; min-width: 0; }
+.ui-statement-section > h2 { margin-bottom: var(--sp-3); font-size: var(--type-section); }
+.ui-statement-section .table-wrap { max-width: 100%; overflow-x: auto; overscroll-behavior-x: contain; border: 1px solid var(--border); border-radius: var(--r-sm); }
+.ui-statement-section .ui-table { min-width: 560px; width: 100%; }
+.ui-statement-section .ui-table td { vertical-align: top; overflow-wrap: anywhere; }
+.ui-statement-section .ui-table td.r { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ui-statement-section .ui-table tbody tr:last-child:has(strong) { background: var(--active-bg); }
+.ui-statement-section > .muted, .ui-statement footer .muted { font-size: var(--fs-sm); line-height: var(--lh-body); }
+.ui-statement footer { border-top: 1px solid var(--border); margin-top: var(--sp-6); padding-top: var(--sp-4); }
+.ui-statement footer p { margin: var(--sp-2) 0; }
+@media (max-width: 640px) {
+  .ui-report-filters { grid-template-columns: 1fr 1fr; padding: var(--sp-4); gap: var(--sp-3); }
+  .ui-report-filters .field:first-child { grid-column: 1 / -1; }
+  .ui-report-filters > .btn { grid-column: 1 / -1; margin-bottom: 0; justify-content: center; }
+  .ui-report-actions .btn { flex: 1 1 140px; justify-content: center; }
+  .ui-statement { padding: var(--sp-4); border-radius: var(--r-md); }
+  .ui-statement-letterhead .ui-statement-workspace { font-size: var(--fs-lg); }
+  .ui-statement-section .table-wrap { margin-inline: 0; }
+  .ui-statement-section .ui-table { min-width: 0; }
+  .ui-statement-section .ui-table td.r { white-space: normal; }
+}
+@media (max-width: 700px) { .ui-statement-section .ui-table { min-width: 0; } }
+@media print {
+  .ui-report-filters, .ui-report-actions, #statement-preview ~ .muted { display: none !important; }
+  .ui-statement { padding: 0; border: 0; box-shadow: none; }
+  .ui-statement-section { break-inside: auto; }
+  .ui-statement-section > h2 { break-after: avoid; }
+  .ui-statement-section .table-wrap { overflow: visible; border: 0; }
+  .ui-statement-section .ui-table { min-width: 0; display: table; }
+  .ui-statement-section .ui-table thead { display: table-header-group; position: static; width: auto; height: auto; overflow: visible; clip: auto; }
+  .ui-statement-section .ui-table tbody { display: table-row-group; }
+  .ui-statement-section .ui-table tr { display: table-row; break-inside: avoid; }
+  .ui-statement-section .ui-table td, .ui-statement-section .ui-table th { display: table-cell !important; padding: var(--sp-3) !important; }
+  .ui-statement-section .ui-table td::before { content: none; }
+}

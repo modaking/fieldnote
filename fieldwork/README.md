@@ -1,36 +1,120 @@
-# fieldwork. — farm management for Kenyan farms
+# fieldnote. — farm management for Kenyan farms
 
-Plain HTML/CSS/vanilla JS. No build step. Supabase (Postgres, Auth, Storage) + Vercel static hosting with `/api` functions.
-Status: **Stage 3** complete (budgets, closing cash, recurring payments, categories, linked filters). Next: map (stage 4).
+Plain HTML/CSS/JavaScript, Supabase REST/Auth/Storage and Vercel `/api` functions.
+No build step or added runtime libraries. Architecture, stored records and ISO
+currency **minor units** are retained (KES 100 = KSh 1).
 
-## 1. Supabase
-1. Create a project at supabase.com (pick the region closest to Nairobi, e.g. eu-west or ap-south).
-2. SQL Editor → paste all of `db/schema.sql` → Run. Run it once, on a fresh project.
-3. Authentication → Providers → Email. For development turn **Confirm email** off; for production leave it on.
-4. Authentication → URL Configuration → set **Site URL** to your Vercel URL (and add `http://localhost:3000` for local testing).
-5. Project Settings → API → copy the **Project URL** and the **anon public** key. Never use the service_role key in this app.
+This is a reviewable usability draft. **All three migrations remain uninstalled.
+All three SQL suites passed in an authorized rollback-only rehearsal on
+the current project; no schema, RLS or fixture rows were retained.** Read
+[Ian's handoff](docs/USABILITY-HANDOFF.md) for release checks and the
+[feature inventory](docs/FEATURE-INVENTORY.md) for preservation mapping.
 
-## 2. Vercel
-1. Push this folder to a Git repo and import it in Vercel (Framework preset: **Other**, no build command, output directory blank).
-2. Environment variables: `SUPABASE_URL`, `SUPABASE_ANON_KEY`. Redeploy.
-3. Open the site, create an account, name your workspace, add farms.
+## Navigation and features
 
-Local: `npm i -g vercel && vercel dev` (serves `/api/config` with a `.env` file containing the two variables). Plain static servers won't serve `/api`.
+Five pages: **Overview · Operations · Finances · People · Reports**. All 16
+sections and 14 business view functions remain; no features were merged or
+retired. Settings is in the workspace menu, Account in the user menu, and old
+module URLs remain valid. Mobile has bottom navigation, More and floating Add;
+Ctrl/Cmd+K searches navigation and recent records.
 
-## Roles
-owner = full admin · manager = full operations write · worker = tasks, checklist runs, transactions.
-The first user to create a workspace becomes its owner. Inviting members arrives in stage 5.
+Overview separates Summary/More insights, with database-computed KPIs, comparisons,
+charts and reminders once its reviewed RPC is installed. Charts include keyboard/
+tap exploration, record drills, exact data tables and PNG/CSV actions. Account
+includes profile/photo, security/TOTP, own sessions, workspaces, invitations,
+notifications, own-data export and guarded deletion. Theme/default farm/default
+period are under **Account → Profile → More options → Display options**.
 
-## Theming rules
-Colors live only in `css/tokens.css`. Run `python3 tools/check-contrast.py` after any palette change.
-Every page needs the inline head script from `docs/theme-head-snippet.html`. See `docs/PARITY-CHECKLIST.md`.
+Tables/forms retain search, filters, sorting, columns, bulk actions, validation and
+save/context guards. Phone rows become labeled cards. Reports offers ten scoped
+statements with live preview, binary PDF and true XLSX section sheets, numeric
+formats, frozen headers and SUM totals. PDF fonts transliterate accents and replace
+unsupported characters; preview/XLSX preserve Unicode.
 
-## Demo data
-On an empty workspace, Overview shows **Load demo data** (owner/manager). It adds 2 farms (Ol Kalou, Mashuru), 4 workers, 1 seed purchase,
-the 4 checklists and sample records in every module. Names of people, vendors and funders are fictional. Use a fresh workspace for it:
-there is no one-click "remove demo data" yet.
+## Setup and database review
 
-## Finance notes
-- Budgets and closing cash are per farm, in the workspace base currency. "All farms" shows combined totals; pick one farm to edit or close a month.
-- Closing a month stores that farm's closing cash; next month's opening cash is that stored balance (0 if the previous month was never closed).
-- Saving a transaction in a foreign currency remembers its exchange rate (per day) and pre-fills it next time. Recurring and worker pay use the latest saved rate.
+For a **fresh disposable project only**, initialize `db/schema.sql` once. Never
+rerun it over the existing farm database. These proposals were tested through a
+separately reviewed rollback batch; permanent installation remains a separate decision:
+
+1. `db/migrations/20261118_members_roles.sql` — six roles/farm scope, invitations,
+   audit restrictions, project budgets, vendor bills and enterprise financial links.
+2. `db/migrations/20261118_dashboard.sql` — RLS-bound dashboard/finance aggregates
+   and a checked, server-recomputed farm month close.
+3. `db/migrations/20261118_account.sql` — own preferences/avatars/sessions,
+   optional MFA enforcement and guarded membership/account deletion behavior.
+
+All three SQL suites in `db/tests/` passed on the current project inside one
+reviewed transaction with fixture-isolating savepoints and a final rollback.
+The latest run included the finance extension's 1,005-row totals and server-close
+checks, plus role/farm-scope rejections. Worker finance/pay access
+from the base schema changes only if the reviewed role migration is installed. Owner/Admin
+manage members; only Owner manages owners/admins. Manager manages operations/money,
+Accountant money/pay, Worker field activity and Viewer operational reads.
+Restricted farm scope and redaction require database enforcement. Invitations are
+copyable email-bound links; this app does not send invitation email.
+
+Use Vercel root `fieldwork/`, framework Other and no build command. Configure server
+`SUPABASE_URL` and `SUPABASE_ANON_KEY`. Optional `SUPABASE_SERVICE_ROLE_KEY`
+enables guarded deletion **server-side only**; never put it in browser code, public
+configuration or source. Provider/email, redirect and Vercel environment wiring
+still need live verification. Ordinary static hosting does not serve `/api/config`
+or `/api/account`.
+
+Current-project checks include 44 anonymous/nonmember read-only checks and the
+separate rollback rehearsal. After the finance-extended run, all 1,299 catalog
+fingerprint items matched baseline (MD5 `992fc360118daa1d8f2398d90ba4f75b`), with
+no fixture IDs remaining across 25 reserved prefixes. Normal logs and audit
+identity sequence gaps can survive rollback; sequences were not reset. No
+migration is installed by these checks.
+
+## Local checks and sample preview
+
+From `fieldwork/`, with Node 18+:
+
+```sh
+node --experimental-vm-modules tools/check.mjs
+node --experimental-vm-modules --test tests/*.test.mjs db/tests/*.test.mjs
+node tools/preview.mjs
+```
+
+Latest full run: **214 JavaScript tests pass**.
+Static checks resolve 22 browser modules, two APIs, 12 business routes, five pages,
+16 sections and 12 assets; all 32 configured contrast pairs pass in each theme.
+The loopback preview uses invented in-memory records,
+simulated SQL/permissions and six role accounts (`ROLE@fieldwork.test` /
+`sample123`). It never connects to Supabase; real email, Google and deletion
+are disconnected. Never enter real credentials.
+
+Local DOM checks found no horizontal overflow on the main pages at
+360/768/1024/1440 px in either theme. Overview screenshots covered both themes;
+final Overview touch-size and Profile/Search dirty-form rechecks passed. Sample
+Budget Close, Copy feedback, Report and transaction Add/search worked; cancelling
+Filters preserved later budget discard protection. Budgets had no overflow at all
+four widths in both themes. Browser PDF/XLSX and chart PNG/CSV downloads
+worked; PDF parse/render and openpyxl checks passed. Desktop Excel/PDF-reader,
+live Auth, physical devices, screen readers and production wiring remain
+unverified. SQL rehearsal coverage is distinct from real Auth and browser/REST
+end-to-end checks. See the handoff before release.
+
+## Money, sample records and theme
+
+Budgets/closing cash use the workspace base currency and farm scope. Foreign
+transactions retain recorded FX and their generated base amount. Dashboard cash
+uses exact-month saved snapshots; missing snapshots remain unavailable. Bills are
+separate from cash transactions; enterprise margin uses explicit links only.
+Whole calendar periods compare with matching preceding months; arbitrary day
+ranges use equal-day comparisons. Existing worker posting retains the labeled
+four-week/26-day convention. No historical balances or allocations are invented.
+Reads paginate beyond the REST page cap; incomplete financial reads fail visibly.
+The proposed finance RPCs calculate full filtered totals and recompute month
+closing in PostgreSQL; they become available only after the reviewed migration.
+
+Settings → Workspace retains a fictional-data loader for an empty KES workspace
+with all-farm write access. Unlike the memory preview, it stores records in that
+workspace; use a separate empty workspace. There is no one-click sample removal.
+
+Colors stay in `css/tokens.css`; run `python tools/check-contrast.py` after palette
+changes. Retain inline theme initialization and install metadata. The separate
+ZIP's maps/offline sync are not transplanted: there is no service worker or offline
+write queue here.
