@@ -2,6 +2,13 @@
 const K = 'fw-session';
 let C = null;
 let memory = null, storageBlocked = false, refreshing = null;
+let authEpoch = 0;
+const sessionListeners=new Set(),networkListeners=new Set();let requests=0,networkError='';
+export const networkState=()=>({online:typeof navigator==='undefined'||navigator.onLine!==false,pending:requests,error:networkError});
+const notifyNetwork=()=>{for(const listener of networkListeners){try{listener(networkState());}catch{}}};
+export function subscribeNetwork(listener){networkListeners.add(listener);listener(networkState());return()=>networkListeners.delete(listener);}
+export function subscribeSession(listener){sessionListeners.add(listener);return()=>sessionListeners.delete(listener);}
+const requireAuthEpoch = (epoch) => { if (epoch !== authEpoch) throw error('A newer sign-in replaced this request. Continue with the latest account.', 409); };
 
 const error = (message, status = 0, details = null) => Object.assign(new Error(message), { status, details });
 const validSession = (s) => s && typeof s.access_token === 'string' && s.access_token
@@ -15,6 +22,7 @@ const save = (s) => {
   memory = s;
   try { if (s) localStorage.setItem(K, JSON.stringify(s)); else localStorage.removeItem(K); storageBlocked = false; }
   catch { storageBlocked = true; }
+  for(const listener of sessionListeners){try{listener(s);}catch{}}
 };
 const pack = (j) => {
   if (!validSession(j)) throw error('The sign-in response was incomplete. Please try again.', 502);
@@ -25,19 +33,27 @@ const sameSession = (a, b) => a && b && a.user.id === b.user.id && a.refresh_tok
 const currentUser = (uid) => {
   if (!session() || session().user.id !== uid) throw error('Your sign-in changed. Please sign in and try again.', 401);
 };
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (event) => { if (event.key === K) authEpoch++; });
+  window.addEventListener('online',notifyNetwork);window.addEventListener('offline',notifyNetwork);
+}
+export const getPublicConfig = () => C ? { ...C } : null;
 
 async function raw(path, { method = 'GET', body, token, headers = {} } = {}) {
   if (!C) throw error('The app is not configured yet. Refresh and try again.');
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   let r, t;
+  requests++;notifyNetwork();
   try {
     r = await fetch(C.url + path, { method, signal: controller.signal, body: body === undefined ? undefined : JSON.stringify(body),
       headers: { apikey: C.anonKey, 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...headers } });
     t = await r.text();
+    networkError='';
   } catch {
+    networkError='Couldn’t connect. Reconnect and try again.';
     throw error('Couldn’t reach the server. Check your connection and try again.');
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer);requests--;notifyNetwork(); }
   let j = null;
   if (t) { try { j = JSON.parse(t); } catch {
     if (r.ok) throw error('The server returned an unexpected response. Refresh and try again.', 502);
@@ -100,7 +116,7 @@ const tok = async () => {
   return s.access_token;
 };
 
-async function authorized(path, opts = {}) {
+export async function authorized(path, opts = {}) {
   const uid = session()?.user.id;
   let token = await tok();
   currentUser(uid);
@@ -127,39 +143,91 @@ async function authorized(path, opts = {}) {
 }
 
 const redirectTo = () => encodeURIComponent(location.origin + location.pathname);
+const PKCE = 'fw-pkce';
+const base64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 export const auth = {
+  async magicLink(email) {
+    await raw('/auth/v1/otp?redirect_to=' + redirectTo(), { method: 'POST', body: { email: email.trim(), create_user: false } });
+  },
+  async resendVerification(email) {
+    await raw('/auth/v1/resend?redirect_to=' + redirectTo(), { method: 'POST', body: { email: email.trim(), type: 'signup' } });
+  },
+  async google() {
+    const epoch = ++authEpoch;
+    const verifier = base64url(crypto.getRandomValues(new Uint8Array(48)));
+    try { sessionStorage.setItem(PKCE, JSON.stringify({ verifier, at: Date.now() })); }
+    catch { throw error('Allow browser storage to continue with Google. You can also sign in with your email.'); }
+    const challenge = base64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));
+    requireAuthEpoch(epoch);
+    location.assign(C.url + '/auth/v1/authorize?provider=google&redirect_to=' + redirectTo() + '&code_challenge_method=s256&code_challenge=' + challenge);
+  },
   async signUp(email, password, full_name) {
+    const epoch = ++authEpoch;
     const j = await raw('/auth/v1/signup?redirect_to=' + redirectTo(), { method: 'POST', body: { email: email.trim(), password, data: { full_name } } });
+    requireAuthEpoch(epoch);
     if (j?.access_token) { save(pack(j)); return { signedIn: true }; }
     return { signedIn: false };              // email confirmation is on
   },
   async signIn(email, password) {
-    save(pack(await raw('/auth/v1/token?grant_type=password', { method: 'POST', body: { email: email.trim(), password } })));
+    const epoch = ++authEpoch;
+    const next = pack(await raw('/auth/v1/token?grant_type=password', { method: 'POST', body: { email: email.trim(), password } }));
+    requireAuthEpoch(epoch); save(next);
   },
   async reset(email) { await raw('/auth/v1/recover?redirect_to=' + redirectTo(), { method: 'POST', body: { email: email.trim() } }); },
-  async updatePassword(password) {
+  async updatePassword(password, nonce) {
     if (typeof password !== 'string' || password.length < 8) throw error('Use a password with at least 8 characters.', 400);
-    const user = await authorized('/auth/v1/user', { method: 'PUT', body: { password } });
+    const user = await authorized('/auth/v1/user', { method: 'PUT', body: { password, ...(nonce ? { nonce } : {}) } });
     const s = session(); if (s && user?.id === s.user.id) save({ ...s, user });
     return user;
   },
   async consumeRedirect() {
+    const query = new URLSearchParams(location.search);
+    if (query.has('code') || query.has('error_description')) {
+      const epoch = ++authEpoch;
+      const code = query.get('code'); query.delete('code');
+      const message = query.get('error_description'); query.delete('error_description'); query.delete('error');
+      history.replaceState(null, '', location.pathname + (query.size ? '?' + query : '') + location.hash);
+      if (message) throw error(message, 400);
+      let pending;
+      try { pending = JSON.parse(sessionStorage.getItem(PKCE)); sessionStorage.removeItem(PKCE); } catch {}
+      const age = Date.now() - pending?.at;
+      if (typeof pending?.verifier !== 'string' || !pending.verifier || !Number.isFinite(pending.at) || !Number.isFinite(age) || age < 0 || age > 15 * 60 * 1000) throw error('This sign-in link expired or was opened in another browser. Start sign-in again here.', 400);
+      const next = pack(await raw('/auth/v1/token?grant_type=pkce', { method: 'POST', body: { auth_code: code, code_verifier: pending.verifier } }));
+      const expectedUser=pending.expectedUserId||pending.userId;
+      if(expectedUser&&(next.user.id!==expectedUser||(session()&&session().user.id!==expectedUser)))throw error('Google returned a different account. Sign in to the original account and try linking again.',401);
+      requireAuthEpoch(epoch); save(next);
+      return { type: 'oauth' };
+    }
     const p = new URLSearchParams(location.hash.replace(/^#\/?/, ''));
     if (!p.has('access_token') && !p.has('error') && !p.has('error_description')) return null;
+    const epoch = ++authEpoch;
     // Remove credentials from the address immediately, including on expired links.
     history.replaceState(null, '', location.pathname + location.search);
     if (p.has('error') || p.has('error_description')) throw error(p.get('error_description') || 'This email link is invalid or has expired. Request a new one.', 400);
     const access_token = p.get('access_token'), refresh_token = p.get('refresh_token');
     if (!access_token || !refresh_token) throw error('This email link is incomplete. Request a new one.', 400);
     const user = await raw('/auth/v1/user', { token: access_token });
+    requireAuthEpoch(epoch);
     save(pack({ access_token, refresh_token, user, expires_at: p.get('expires_at'), expires_in: p.get('expires_in') }));
     return { type: p.get('type') || 'signup' };
   },
   async signOut() {
+    authEpoch++;
     const token = session()?.access_token;
     save(null);
-    if (token) { try { await raw('/auth/v1/logout', { method: 'POST', token }); } catch {} }
+    try { sessionStorage.removeItem(PKCE); } catch {}
+    if (token) { try { await raw('/auth/v1/logout', { method: 'POST', token }); } catch { return {remoteRevoked:false}; } }
+    return {remoteRevoked:true};
   },
+  async adoptSession(next) {
+    const uid = session()?.user.id, epoch = ++authEpoch, packed = pack(next);
+    if (!uid || packed.user.id !== uid) throw error('Your account changed. Sign in and try again.', 401);
+    const user = await raw('/auth/v1/user', { token: packed.access_token });
+    requireAuthEpoch(epoch); currentUser(uid);
+    if (user?.id !== uid) throw error('Your account changed. Sign in and try again.', 401);
+    save({ ...packed, user });
+  },
+  syncUser(user) { const s=session(); if (s && user?.id===s.user.id) save({...s,user}); },
 };
 
 const rest = (path, opts = {}) => authorized('/rest/v1/' + path, opts);
@@ -177,6 +245,7 @@ const first = (rows, action) => {
   return rows[0];
 };
 export const db = {
+  rpc: (name, args = {}) => rest('rpc/' + tableName(name), { method: 'POST', body: args }),
   select: (table, query = '') => rest(`${tableName(table)}?${query}`),
   insert: async (table, row) => first(await rest(tableName(table), { method: 'POST', body: row, headers: rep }), 'saved'),
   insertMany: (table, rows) => rest(tableName(table), { method: 'POST', body: rows, headers: rep }),

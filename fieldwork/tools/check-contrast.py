@@ -15,7 +15,8 @@ def cr(a, b):
 PAIRS = [  # (fg, bg, min)
  ("text","bg",4.5),("text","surface",4.5),("text","surface-2",4.5),
  ("text-muted","bg",4.5),("text-muted","surface",4.5),("text-muted","surface-2",4.5),
- ("text-faint","surface",4.5),("on-primary","primary",4.5),("on-primary","primary-hover",4.5),
+ ("text-faint","surface",4.5),("text-faint","bg",4.5),("text-faint","surface-2",4.5),
+ ("on-primary","primary",4.5),("on-primary","primary-hover",4.5),
  ("active-text","active-bg",4.5),("link","bg",4.5),("link","surface",4.5),
  ("positive","surface",4.5),("negative","surface",4.5),("positive","bg",4.5),("negative","bg",4.5),
  ("badge-ok-text","badge-ok-bg",4.5),("badge-warn-text","badge-warn-bg",4.5),

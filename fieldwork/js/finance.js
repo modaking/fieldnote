@@ -1,12 +1,14 @@
 import { resource, minorAmount } from './crud.js';
+import * as C from './components.js';
+import { registerUnsaved } from './feedback.js';
 const digits = (cur) => new Intl.NumberFormat('en', { style: 'currency', currency: cur }).resolvedOptions().maximumFractionDigits;
 const prevMonth = (a) => { const d = new Date(`${a}T00:00`); d.setMonth(d.getMonth() - 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`; };
 
 /* ── Budget vs actual + closing cash ── */
 export async function budget(box, X) {
   const { S, db, esc, money, toast, monthRange } = X, [a, b] = monthRange(), prev = prevMonth(a), base = S.ws.currency, d = digits(base);
-  const workspace = S.ws.id, scope = `workspace_id=eq.${workspace}`, farm = S.farmId === 'all' ? null : S.farmId, fq = farm ? `&farm_id=eq.${farm}` : '', edit = X.canWrite() && farm;
-  let busy = false;
+  const workspace = S.ws.id, scope = `workspace_id=eq.${workspace}`, farm = S.farmId === 'all' ? null : S.farmId, fq = farm ? `&farm_id=eq.${farm}` : '', write = () => X.permissions?.canWriteModule?.('finances') ?? X.canWrite(), edit = write() && farm;
+  let busy = false;const drafts=new Set(),actor=X.uid?.(),current=()=>S.ws?.id===workspace&&(!actor||X.uid?.()===actor);
   const [cats, bud, tx, pc, tc] = await Promise.all([db.select('categories', `${scope}&order=kind,name`), db.select('budgets', `${scope}&month=eq.${a}${fq}`),
     db.select('transactions', `${scope}&select=category_id,kind,amount_base&txn_date=gte.${a}&txn_date=lt.${b}${fq}`), db.select('month_closings', `${scope}&month=eq.${prev}${fq}`), db.select('month_closings', `${scope}&month=eq.${a}${fq}`)]);
   const sum = (arr, f) => arr.reduce((t, r) => t + f(r), 0), act = (k, c) => sum(tx.filter((t) => t.kind === k && t.category_id === c), (t) => t.amount_base), bg = (c) => sum(bud.filter((x) => x.category_id === c), (x) => x.amount);
@@ -16,28 +18,36 @@ export async function budget(box, X) {
   const section = (kind) => {
     const list = cats.filter((c) => c.kind === kind).map((c) => ({ id: c.id, name: c.name })); if (act(kind, null)) list.push({ id: null, name: 'Uncategorised' });
     const tb = sum(list, (c) => (c.id ? bg(c.id) : 0)), ta = sum(list, (c) => act(kind, c.id));
-    const rows = list.map((c) => { const B = c.id ? bg(c.id) : 0, A = act(kind, c.id), left = kind === 'expense' ? B - A : A - B, over = kind === 'expense' && B > 0 && A > B;
-      return `<tr><td>${esc(c.name)}</td><td class="r">${edit && c.id ? `<input class="bin" type="number" step="${10 ** -d}" min="0" data-c="${c.id}" aria-label="Budget for ${esc(c.name)} (${base})" value="${B ? B / 10 ** d : ''}" placeholder="0">` : money(B)}</td>
-        <td class="r">${money(A)}</td><td class="r ${left < 0 ? 'neg' : ''}">${B ? money(left) : '—'}</td><td>${over ? '<span class="badge neg">Over budget</span>' : B && A ? `<span class="badge ok">${Math.round((A / B) * 100)}% ${kind === 'expense' ? 'used' : 'of target'}</span>` : ''}</td></tr>`; }).join('');
-    return `<h2 style="margin:var(--sp-5) 0 var(--sp-3);font-size:var(--fs-lg)">${kind === 'expense' ? 'Expenses' : 'Income'}</h2><div class="table-wrap"><table><thead><tr><th>Category</th><th class="r">Budget</th><th class="r">Actual</th><th class="r">${kind === 'expense' ? 'Left' : 'Ahead'}</th><th></th></tr></thead>
-      <tbody>${rows || `<tr><td colspan="5" class="muted">No categories yet. Add some in the Categories tab.</td></tr>`}<tr><td><b>Total</b></td><td class="r"><b>${money(tb)}</b></td><td class="r"><b>${money(ta)}</b></td><td></td><td></td></tr></tbody></table></div>`;
+    const data = list.map((c) => { const B = c.id ? bg(c.id) : 0, A = act(kind, c.id); return { ...c, budget: B, actual: A, left: kind === 'expense' ? B - A : A - B }; });
+    return `<section class="ui-budget-section"><h2>${kind === 'expense' ? 'Expenses' : 'Income'}</h2>${data.length ? C.dataTable({ caption: `${kind} budget against actual spending`, rows: data,
+      columns: [{ key: 'name', label: 'Category' }, { key: 'budget', label: `Budget (${base})`, numeric: true, render: (r) => edit && r.id ? C.field({label:`Budget for ${r.name} (${base})`,labelHTML:`<span class="ui-sr-only">${esc(`Budget for ${r.name} (${base})`)}</span>`,name:`budget-${r.id}`,type:'number',value:r.budget?r.budget/10**d:'',attrs:{class:'bin',step:10**-d,min:0,'data-c':r.id,placeholder:'0'}}) : money(r.budget) },
+        { key: 'actual', label: 'Actual', numeric: true, render: (r) => money(r.actual) }, { key: 'left', label: kind === 'expense' ? 'Left' : 'Ahead', numeric: true, render: (r) => r.budget ? `<span class="${r.left < 0 ? 'neg' : ''}">${money(r.left)}</span>` : '—' },
+        { key: 'used', label: 'Progress', render: (r) => kind === 'expense' && r.budget > 0 && r.actual > r.budget ? C.badge({ label: 'Over budget', tone: 'negative' }) : r.budget && r.actual ? C.badge({ label: `${Math.round(r.actual / r.budget * 100)}% ${kind === 'expense' ? 'used' : 'of target'}`, tone: 'positive' }) : '—' }] }) : C.emptyState({ title: 'No categories yet', text: 'Add income and expense categories in the Categories tab.' })}<div class="sumbar"><span>Budget total <b>${money(tb)}</b></span><span>Actual total <b>${money(ta)}</b></span></div></section>`;
   };
-  box.innerHTML = `<div class="grid"><div class="card"><span class="muted">Opening cash</span><div class="kpi">${money(opening)}</div></div>
+  const canReport = typeof X.report === 'function' && (!X.canReport || X.canReport('finances'));
+  const more=[...(canReport?[{label:'Report',attrs:{id:'budget-report'}}]:[]),...(edit?[{label:'Copy last month’s budget',attrs:{id:'copy'}}]:[])];
+  box.innerHTML = C.pageHeader({ title: 'Budget & closing cash', description: 'Plan the month and see how actual spending compares.', actions: (more.length?C.actionMenu({label:'More actions',text:'More actions',items:more}):'')+(edit?C.button({label:'Close month',attrs:{id:'close'}}):'') }) + `<div class="grid"><div class="card"><span class="muted">Opening cash</span><div class="kpi">${money(opening)}</div></div>
       <div class="card"><span class="muted">Net this month</span><div class="kpi ${inc - exp < 0 ? 'neg' : 'pos'}">${money(inc - exp)}</div></div>
       <div class="card"><span class="muted">Closing cash</span><div class="kpi ${closing < 0 ? 'neg' : ''}">${money(closing)}</div>${stored !== null ? `<span class="badge ${stored === closing ? 'ok' : 'warn'}">${stored === closing ? 'Month closed' : `Closed at ${money(stored)}`}</span>` : ''}</div></div>
-    <div class="btns">${edit ? '<button class="btn" id="close">Close month</button><button class="btn ghost" id="copy">Copy last month’s budget</button>' : ''}</div>
-    ${X.canWrite() && !farm ? '<p class="muted">Pick one farm above to edit its budget and close its month. All farms shows the combined totals.</p>' : ''}${section('expense')}${section('income')}`;
+    ${write() && !farm ? C.notice({ text: 'Choose one farm to edit its budget and close its month. All farms shows combined totals.' }) : ''}${section('expense')}${section('income')}`;
+  box.querySelector('#budget-report')?.addEventListener('click', () => X.report('finances'));
+  const firstInput=box.querySelector('[data-c]'),unregister=registerUnsaved({element:box,isDirty:()=>drafts.size>0,isSaving:()=>busy,isActive:()=>current()&&box.querySelector('[data-c]')===firstInput});
+  const validateBudget=(input)=>{let error='';try{minorAmount(input.value,base);}catch(failure){error=failure.message;}
+    input.setAttribute('aria-invalid',error?'true':'false');const hint=box.querySelector(`[data-error-for="budget-${input.dataset.c}"]`);if(hint){hint.hidden=!error;hint.textContent=error;}return error;
+  };
+  box.oninput=(event)=>{const input=event.target;if(!input.dataset.c||!edit)return;drafts.add(input.dataset.c);validateBudget(input);};
   const pending = (value) => { busy = value; box.setAttribute('aria-busy', String(value)); box.querySelectorAll('input,button').forEach((control) => { control.disabled = value; }); };
-  box.onchange = async (e) => { const i = e.target; if (!i.dataset.c || busy || !edit || !X.canWrite() || S.ws.id !== workspace) return;
-    try { const amount = minorAmount(i.value, base) ?? 0; i.removeAttribute('aria-invalid'); pending(true);
-      await db.upsert('budgets', { workspace_id: workspace, farm_id: farm, category_id: i.dataset.c, month: a, amount }, 'workspace_id,farm_id,category_id,month'); await budget(box, X);
+  box.onchange = async (e) => { const i = e.target; if (!i.dataset.c || busy || !edit || !write() || S.ws.id !== workspace) return;
+    drafts.add(i.dataset.c);
+    try { const invalid=validateBudget(i);if(invalid)throw new Error(invalid);const amount = minorAmount(i.value, base) ?? 0; i.removeAttribute('aria-invalid'); pending(true);
+      await db.upsert('budgets', { workspace_id: workspace, farm_id: farm, category_id: i.dataset.c, month: a, amount }, 'workspace_id,farm_id,category_id,month');if(!current())return;drafts.delete(i.dataset.c);unregister();toast('Budget saved.');await budget(box, X);
     } catch (x) { i.setAttribute('aria-invalid', 'true'); toast(x.message); i.focus(); } finally { pending(false); } };
-  box.onclick = async (e) => { const id = e.target.closest('button')?.id; if (!id || busy || !edit || !X.canWrite() || S.ws.id !== workspace) return;
+  box.onclick = async (e) => { const id = e.target.closest('button')?.id; if (!['close', 'copy'].includes(id) || busy || !edit || !write() || S.ws.id !== workspace) return;
     pending(true);
     try {
-      if (id === 'close') { await db.upsert('month_closings', { workspace_id: workspace, farm_id: farm, month: a, closing_cash: closing }, 'workspace_id,farm_id,month'); toast('Month closed. Next month opens with this balance.'); await budget(box, X); }
+      if (id === 'close') { await db.upsert('month_closings', { workspace_id: workspace, farm_id: farm, month: a, closing_cash: closing }, 'workspace_id,farm_id,month');if(!current())return;unregister();toast('Month closed. Next month opens with this balance.'); await budget(box, X); }
       if (id === 'copy') { const old = await db.select('budgets', `${scope}&month=eq.${prev}&farm_id=eq.${farm}`); if (!old.length) return toast('Last month has no budget to copy');
-        if (!bud.length || confirm('Replace this month’s budget lines with last month’s?')) { await db.upsert('budgets', old.map((r) => ({ workspace_id: workspace, farm_id: farm, category_id: r.category_id, month: a, amount: r.amount })), 'workspace_id,farm_id,category_id,month'); await budget(box, X); } }
+        if (!bud.length || await C.confirmDialog({title:'Replace this month’s budget?',text:'The matching budget lines will use last month’s amounts.',confirmLabel:'Copy budget'})) {if(!current())return;await db.upsert('budgets', old.map((r) => ({ workspace_id: workspace, farm_id: farm, category_id: r.category_id, month: a, amount: r.amount })), 'workspace_id,farm_id,category_id,month');if(!current())return;unregister();toast('Budget copied.');await budget(box, X); } }
     } catch (x) { toast(x.message); } finally { pending(false); } };
 }
 
@@ -51,24 +61,30 @@ const RECUR = { table: 'recurring_payments', title: 'Recurring payments', singul
   cols: [{ k: 'name', label: 'Name' }, { k: 'kind', label: 'Type', t: 'badge' }, { k: 'farm_id', label: 'Farm', t: 'farms' }, { k: 'category_id', label: 'Category', t: 'categories' }, { k: 'day_of_month', label: 'Day' }, { k: 'amount', label: 'Amount', t: 'money' }] };
 export async function recurring(box, X) {
   const { S, db, toast } = X, workspace = S.ws.id, scope = `workspace_id=eq.${workspace}`, base = S.ws.currency;
-  box.innerHTML = `${X.canWrite() ? `<div class="banner"><span>Post this month’s recurring payments to the register. Anything already posted is skipped.</span><button class="btn sm" id="postr">Post ${X.monthLabel()}</button></div>` : ''}<div id="rc"></div>`;
-  box.querySelector('#postr')?.addEventListener('click', async (event) => {
-    const button = event.currentTarget; if (button.disabled || !X.canWrite() || S.ws.id !== workspace) return; button.disabled = true;
+  const write = () => X.permissions?.canWriteModule?.('finances') ?? X.canWrite();
+  const actor=X.uid?.(),current=()=>S.ws?.id===workspace&&(!actor||X.uid?.()===actor)&&write();
+  box.innerHTML = `${write() ? C.notice({ title: 'Keep regular payments up to date', text: 'Use More actions to post this month’s active payments. Previously posted entries are skipped.' }) : ''}<div id="rc"></div>`;
+  const postRecurring=async (event) => {
+    const button = event.currentTarget; if (button.disabled || !current()) return; button.disabled = true;
     try {
       const [a, b] = X.monthRange(), fq = S.farmId === 'all' ? '' : `&farm_id=eq.${S.farmId}`;
       const [list, done] = await Promise.all([db.select('recurring_payments', `${scope}&active=eq.true${fq}`), db.select('transactions', `${scope}&select=source_id&source_type=eq.recurring&source_period=eq.${a}`)]);
       const posted = new Set(done.map((r) => r.source_id)), rows = [], skipped = [];
       for (const r of list.filter((r) => !posted.has(r.id))) {
+        if(!current())return;
         let fx = 1; if (r.currency !== base) { const [x] = await db.select('fx_rates', `${scope}&currency=eq.${r.currency}&order=as_of.desc&limit=1`); if (!x) { skipped.push(r.name); continue; } fx = x.rate; }
         rows.push({ workspace_id: workspace, farm_id: r.farm_id, txn_date: `${a.slice(0, 8)}${String(r.day_of_month).padStart(2, '0')}`, kind: r.kind, amount: r.amount, currency: r.currency, fx_rate: fx,
           category_id: r.category_id, vendor_id: r.vendor_id, description: r.name, source_type: 'recurring', source_id: r.id, source_period: a });
       }
-      if (S.ws.id !== workspace) throw new Error('The workspace changed. Reopen recurring payments before posting.');
+      if (!current())return;
       if (rows.some((r) => !Number.isSafeInteger(r.amount) || !Number.isFinite(Number(r.fx_rate)) || Number(r.fx_rate) <= 0)) throw new Error('An amount or exchange rate is invalid. Review recurring payments before posting.');
       if (rows.length) await db.insertMany('transactions', rows);
+      if(!current())return;
       toast(`${rows.length} posted${skipped.length ? `. No exchange rate for ${skipped.join(', ')}` : ''}${!rows.length && !skipped.length ? ' (all already posted)' : ''}`);
-    } catch (x) { toast(x.message); } finally { button.disabled = false; } });
-  await resource(box.querySelector('#rc'), X, RECUR);
+    } catch (x) {if(current())toast(x.message);} finally { button.disabled = false; } };
+  await resource(box.querySelector('#rc'), X, {...RECUR,moreActions:write()?[{label:`Post ${X.monthLabel()}`,attrs:{id:'postr'}}]:[]});
+  box.querySelector('#postr')?.addEventListener('click',postRecurring);
+  const header=box.querySelector('.ui-page-header');if(header)box.prepend(header);
 }
 
 /* ── Categories ── */

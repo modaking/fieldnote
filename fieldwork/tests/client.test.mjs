@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { test } from 'node:test';
+import { createHash } from 'node:crypto';
 
 // Run the existing, dependency-free client against controlled fetch/storage
 // boundaries. These tests never contact a real account or database.
@@ -21,9 +22,15 @@ async function client({ stored = signedIn(), deferInit = false, config = { url: 
     setItem: (key, value) => values.set(key, value),
     removeItem: (key) => values.delete(key),
   };
-  globalThis.location = { origin: 'https://fieldwork.example.invalid', pathname: '/farm/', search: '?keep=1', hash: '' };
+  const tabValues = new Map(), assignments = [];
+  globalThis.sessionStorage = {
+    getItem: (key) => tabValues.get(key) ?? null,
+    setItem: (key, value) => tabValues.set(key, value),
+    removeItem: (key) => tabValues.delete(key),
+  };
+  globalThis.location = { origin: 'https://fieldwork.example.invalid', pathname: '/farm/', search: '?keep=1', hash: '', assign: (url) => assignments.push(url) };
   const historyCalls = [];
-  globalThis.history = { replaceState: (_state, _title, path) => { historyCalls.push(path); location.hash = ''; } };
+  globalThis.history = { replaceState: (_state, _title, path) => { historyCalls.push(path); const next = new URL(path, location.origin); Object.assign(location, { pathname: next.pathname, search: next.search, hash: next.hash }); } };
   const calls = [];
   let handler = ({ url, method, body }) => {
     if (url.includes('/auth/v1/token')) return reply(signedIn({ access_token: 'fresh-access', refresh_token: 'fresh-refresh' }));
@@ -40,7 +47,7 @@ async function client({ stored = signedIn(), deferInit = false, config = { url: 
   // A fresh module isolates session/refresh state without changing the source or
   // requiring a package manager, test library, or experimental Node flag.
   const api = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#case-${++moduleNumber}`);
-  const result = { ...api, calls, values, historyCalls, respond: (fn) => { handler = fn; } };
+  const result = { ...api, calls, values, tabValues, assignments, historyCalls, respond: (fn) => { handler = fn; } };
   if (!deferInit) await api.init();
   calls.length = 0;
   return result;
@@ -272,4 +279,102 @@ test('stalled configuration loading times out instead of leaving boot waiting fo
   try { await assert.rejects(c.init(), { status: 0, message: /load app settings.*Check your connection/ }); }
   finally { globalThis.setTimeout = realTimeout; }
   assert.ok(c.session());
+});
+
+test('magic-link sign-in never creates a new user and returns to the app path', async () => {
+  const c = await client(); c.respond(() => reply({}));
+  await c.auth.magicLink(' farmer@example.invalid ');
+  const request = c.calls[0], url = new URL(request.url);
+  assert.equal(request.method, 'POST'); assert.equal(url.pathname, '/auth/v1/otp');
+  assert.equal(url.searchParams.get('redirect_to'), 'https://fieldwork.example.invalid/farm/');
+  assert.deepEqual(JSON.parse(request.body), { email: 'farmer@example.invalid', create_user: false });
+  assert.equal(c.session().user.id, 'user-a');
+});
+
+test('resending verification requests only signup confirmation and preserves sign-in', async () => {
+  const c = await client(); c.respond(() => reply({}));
+  await c.auth.resendVerification(' farmer@example.invalid ');
+  const request = c.calls[0], url = new URL(request.url);
+  assert.equal(request.method, 'POST'); assert.equal(url.pathname, '/auth/v1/resend');
+  assert.equal(url.searchParams.get('redirect_to'), 'https://fieldwork.example.invalid/farm/');
+  assert.deepEqual(JSON.parse(request.body), { email: 'farmer@example.invalid', type: 'signup' });
+  assert.equal(c.session().access_token, 'access-a');
+});
+
+test('Google sign-in stores a tab-local verifier and sends its SHA-256 challenge only', async () => {
+  const c = await client();
+  await c.auth.google();
+  const pending = JSON.parse(c.tabValues.get('fw-pkce')), url = new URL(c.assignments[0]);
+  assert.match(pending.verifier, /^[A-Za-z0-9_-]{64}$/); assert.ok(Math.abs(Date.now() - pending.at) < 5000);
+  assert.equal(url.origin, 'https://db.example.invalid'); assert.equal(url.pathname, '/auth/v1/authorize');
+  assert.equal(url.searchParams.get('provider'), 'google'); assert.equal(url.searchParams.get('code_challenge_method'), 's256');
+  assert.equal(url.searchParams.get('code_challenge'), createHash('sha256').update(pending.verifier).digest('base64url'));
+  assert.equal(url.searchParams.get('redirect_to'), 'https://fieldwork.example.invalid/farm/');
+  assert.ok(!url.toString().includes(pending.verifier)); assert.equal(c.calls.length, 0);
+  assert.equal(c.values.has('fw-pkce'), false); assert.equal(c.session().user.id, 'user-a');
+});
+
+test('Google sign-in explains blocked tab storage without navigating or deleting sign-in', async () => {
+  const c = await client(); sessionStorage.setItem = () => { throw new Error('Storage blocked'); };
+  await assert.rejects(c.auth.google(), /Allow browser storage/);
+  assert.equal(c.assignments.length, 0); assert.equal(c.session().user.id, 'user-a');
+});
+
+test('PKCE redirects scrub the code before exchange and replace the session only after success', async () => {
+  const c = await client({ deferInit: true, stored: signedIn({ expires_at: 1 }) });
+  location.search = '?keep=1&code=returned-code'; location.hash = '#/overview';
+  c.tabValues.set('fw-pkce', JSON.stringify({ verifier: 'sample-verifier-from-this-tab', at: Date.now() }));
+  c.respond(({ url, method, body }) => {
+    assert.equal(location.search, '?keep=1'); assert.equal(location.hash, '#/overview');
+    assert.ok(!location.search.includes('returned-code'));
+    assert.match(url, /grant_type=pkce$/); assert.equal(method, 'POST');
+    assert.deepEqual(JSON.parse(body), { auth_code: 'returned-code', code_verifier: 'sample-verifier-from-this-tab' });
+    return reply(signedIn({ access_token: 'oauth-access', refresh_token: 'oauth-refresh', user: { id: 'oauth-user' } }));
+  });
+  assert.deepEqual(await c.init(), { type: 'oauth' });
+  assert.deepEqual(c.historyCalls, ['/farm/?keep=1#/overview']);
+  assert.equal(c.tabValues.has('fw-pkce'), false); assert.equal(c.session().user.id, 'oauth-user');
+  assert.equal(c.calls.filter((request) => request.url.includes('grant_type=refresh_token')).length, 0);
+});
+
+test('missing or stale PKCE proof is rejected without erasing an existing session', async () => {
+  for (const pending of [null, { at: Date.now() }, { verifier: 'expired-verifier', at: Date.now() - 16 * 60 * 1000 }, { verifier: 'missing-timestamp' }]) {
+    const c = await client({ deferInit: true }); location.search = '?code=untrusted-code&keep=1';
+    if (pending) c.tabValues.set('fw-pkce', JSON.stringify(pending));
+    c.respond(() => { throw new Error('Invalid proof must not reach the token endpoint.'); });
+    await assert.rejects(c.init(), { status: 400, message: /expired|another browser/ });
+    assert.equal(location.search, '?keep=1'); assert.equal(c.session().user.id, 'user-a');
+    assert.equal(c.calls.filter((request) => request.url.includes('/auth/')).length, 0);
+  }
+});
+
+test('RPCs use authenticated JSON POST and validate function names before sending', async () => {
+  const c = await client(); c.respond(() => reply([{ user_id: 'member-one', role: 'worker' }]));
+  const members = await c.db.rpc('fw_list_members', { p_workspace_id: 'workspace-a' });
+  assert.equal(members[0].user_id, 'member-one'); const request = c.calls[0];
+  assert.equal(request.method, 'POST'); assert.equal(new URL(request.url).pathname, '/rest/v1/rpc/fw_list_members');
+  assert.equal(request.headers.Authorization, 'Bearer access-a');
+  assert.deepEqual(JSON.parse(request.body), { p_workspace_id: 'workspace-a' });
+  for (const name of ['', '../users', 'public.fn', 'fw_list_members?override=1']) assert.throws(() => c.db.rpc(name, {}), { status: 400 });
+  assert.equal(c.calls.length, 1);
+});
+
+test('an earlier password sign-in cannot replace a newer account', async () => {
+  const c=await client({stored:null});const replies=new Map();
+  c.respond(({body})=>new Promise(resolve=>replies.set(JSON.parse(body).email,resolve)));
+  const first=c.auth.signIn('first@example.invalid','dummy-password');
+  const rejected=assert.rejects(first,{status:409,message:/newer sign-in/});
+  const second=c.auth.signIn('second@example.invalid','dummy-password');await turn();
+  replies.get('second@example.invalid')(reply(signedIn({user:{id:'user-second'}})));await second;
+  replies.get('first@example.invalid')(reply(signedIn({user:{id:'user-first'}})));await rejected;
+  assert.equal(c.session().user.id,'user-second');
+});
+
+test('a signup finishing after sign-out cannot restore an authenticated session', async () => {
+  const c=await client();let complete;
+  c.respond(({url})=>url.includes('/signup')?new Promise(resolve=>{complete=resolve;}):reply(null,204));
+  const pending=c.auth.signUp('new@example.invalid','dummy-password','Sample');
+  const rejected=assert.rejects(pending,{status:409});await turn();await c.auth.signOut();
+  complete(reply(signedIn({user:{id:'user-new'}})));await rejected;
+  assert.equal(c.session(),null);
 });
