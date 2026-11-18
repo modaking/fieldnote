@@ -26,10 +26,12 @@ begin
   end;
   raise exception 'Expected denied/error SQLSTATE %, statement succeeded: %',expected_state,statement;
 end $$;
-create function pg_temp.fw_actor(uid uuid) returns void language plpgsql as $$
+create function pg_temp.fw_actor(uid uuid) returns void language plpgsql security definer set search_path=pg_catalog,public as $$
 begin
+  if uid is not null and split_part(uid::text,'-',1)<>'97000000' then raise exception 'Fixture actor required';end if;
   perform set_config('request.jwt.claim.sub',coalesce(uid::text,''),true);
-  perform set_config('request.jwt.claims',jsonb_build_object('sub',uid,'role',case when uid is null then 'anon' else 'authenticated' end)::text,true);
+  perform set_config('request.jwt.claims',jsonb_build_object('sub',uid,'role',case when uid is null then 'anon' else 'authenticated' end,'aal','aal1','session_id',uid,
+    'email',(select email from auth.users where id=uid),'amr',jsonb_build_array(jsonb_build_object('method','magiclink','timestamp',extract(epoch from statement_timestamp()-interval '30 seconds'))))::text,true);
 end $$;
 grant execute on function pg_temp.fw_assert(boolean,text),pg_temp.fw_expect_error(text,text),pg_temp.fw_actor(uuid) to authenticated,anon;
 create temporary table fw_test_invites(label text primary key,payload jsonb);
@@ -48,7 +50,10 @@ select pg_temp.fw_assert(not exists(
     ('profiles','workspaces','workspace_members','workspace_member_farms','workspace_invites','currencies','seed_merchants','farms','fx_rates','categories','vendors','tasks','checklists','checklist_items','checklist_runs','checklist_run_items','transactions','budgets','month_closings','recurring_payments','projects','enterprises','enterprise_records','workers','funding_opportunities','vendor_bills','audit_log')
     and not c.relrowsecurity),'all existing/new app tables retain RLS');
 
-insert into auth.users(id,email,email_confirmed_at,raw_user_meta_data,raw_app_meta_data) values
+-- Trusted mailbox markers here are fixtures for the role/scope suite. The
+-- Account suite separately proves that clients cannot create these markers.
+insert into auth.users(id,email,email_confirmed_at,raw_user_meta_data,raw_app_meta_data)
+select id::uuid,email,confirmed,metadata::jsonb,jsonb_build_object('fieldnote_mailbox_verified_at','2000-01-01T00:00:00Z','fieldnote_mailbox_verified_email',email) from (values
  ('97000000-0000-4000-8000-000000000001','owner-a@fieldwork.invalid',now(),'{"full_name":"Test Owner A"}','{}'),
  ('97000000-0000-4000-8000-000000000002','owner-b@fieldwork.invalid',now(),'{"full_name":"Test Owner B"}','{}'),
  ('97000000-0000-4000-8000-000000000003','admin@fieldwork.invalid',now(),'{"full_name":"Test Admin"}','{}'),
@@ -62,7 +67,10 @@ insert into auth.users(id,email,email_confirmed_at,raw_user_meta_data,raw_app_me
  ('97000000-0000-4000-8000-00000000000b','revoked@fieldwork.invalid',now(),'{"full_name":"Revoked Recipient"}','{}'),
  ('97000000-0000-4000-8000-00000000000c','limited-finance@fieldwork.invalid',now(),'{"full_name":"Restricted Accountant"}','{}'),
  ('97000000-0000-4000-8000-00000000000d','expired@fieldwork.invalid',now(),'{"full_name":"Expired Recipient"}','{}'),
- ('97000000-0000-4000-8000-00000000000e','unverified@fieldwork.invalid',null,'{"full_name":"Unverified Recipient"}','{}');
+ ('97000000-0000-4000-8000-00000000000e','unverified@fieldwork.invalid',null,'{"full_name":"Unverified Recipient"}','{}')) as fixtures(id,email,confirmed,metadata,unused);
+insert into auth.sessions(id,user_id,created_at,updated_at)
+ select id,id,statement_timestamp()-interval '2 minutes',statement_timestamp() from auth.users
+ where id>='97000000-0000-4000-8000-000000000001' and id<='97000000-0000-4000-8000-00000000000e';
 insert into public.workspaces(id,name,currency,created_by) values
  ('98000000-0000-4000-8000-000000000001','RLS test workspace A','KES','97000000-0000-4000-8000-000000000001'),
  ('98000000-0000-4000-8000-000000000002','RLS test workspace B','KES','97000000-0000-4000-8000-000000000002');

@@ -117,6 +117,16 @@ test('local preview Auth and account endpoints return exact own-account shapes w
   assert.deepEqual((await preview('/__preview/rest/v1/profiles?id=eq.preview-owner',{token})).body,[],'sample profile reads stay self-only');
 });
 
+test('sample provider discovery hides Google while invitation proof and email delivery stay explicitly disconnected',async()=>{
+  assert.deepEqual((await preview('/__preview/auth/v1/settings')).body,{external:{google:false,email:true},disable_signup:false});
+  const login=await preview('/__preview/auth/v1/token?grant_type=password',{method:'POST',data:{email:'viewer@fieldwork.test',password:'sample123'}}),token=login.body.access_token;
+  const status=()=>preview('/__preview/rest/v1/rpc/fw_invitation_verification',{method:'POST',token,data:{}});
+  assert.deepEqual((await status()).body,{needs_recovery:true,proof_recent:false});
+  const complete=await preview('/__preview/rest/v1/rpc/fw_complete_invite_recovery',{method:'POST',token,data:{}});assert.equal(complete.status,403);assert.match(complete.body.message,/disconnected.*LOCAL SAMPLE/);
+  assert.deepEqual((await status()).body,{needs_recovery:true,proof_recent:false});
+  for(const action of ['recover','otp']){const sent=await preview('/__preview/auth/v1/'+action,{method:'POST',token,data:{email:'viewer@fieldwork.test',code_challenge:'synthetic-only',code_challenge_method:'s256'}});assert.equal(sent.status,400);assert.match(sent.body.message,/not connected.*LOCAL SAMPLE/);}
+});
+
 test('local authenticator is explicitly synthetic and accepts only the published sample code',async()=>{
   const login=await preview('/__preview/auth/v1/token?grant_type=password',{method:'POST',data:{email:'manager@fieldwork.test',password:'sample123'}}),token=login.body.access_token;
   const enrolled=await preview('/__preview/auth/v1/factors',{method:'POST',token,data:{factor_type:'totp',friendly_name:'Sample test'}});

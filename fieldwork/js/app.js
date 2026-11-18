@@ -8,7 +8,7 @@ import { loadDemo } from './seed.js';
 import { renderReports } from './reports.js';
 import { members } from './members.js';
 import { readInviteURL } from './invites.js';
-import { renderAuth as authView, renderReset, formErrors, busy } from './auth-ui.js';
+import { renderAuth as authView, renderReset, renderInvitationVerification, formErrors, busy } from './auth-ui.js';
 import { account, requireMfa } from './account.js';
 import { registerUnsaved,hasUnsavedChanges,confirmLeave,clearUnsavedChanges } from './feedback.js';
 import { PAGES,SECTIONS,resolveNavigation,sectionURL,navigationItems,availableSections,rememberRecent } from './navigation.js';
@@ -90,7 +90,7 @@ function context() {
 }
 
 async function boot() {
-  try { const redirect = await init(); if (redirect?.type === 'recovery') return renderReset(app,{auth,onSignedIn:load,brand}); }
+  try { const redirect = await init();const invite=auth.takeInviteIntent?.();if(invite)pendingInvite=invite;if (redirect?.type === 'recovery') return load(); }
   catch (error) { return renderLoadError('Couldn’t start fieldnote.',error); }
   if (!session()) return renderAuth();
   try { await load(); } catch (error) { if (!session()) return renderAuth(); renderLoadError('Couldn’t load your workspace',error); }
@@ -115,6 +115,7 @@ async function load() {
   const sequence = ++loadSequence, uid = session()?.user.id; if (!uid) return renderAuth();
   if(await requireMfa(app,{brand,auth,session},load))return;
   if(sequence!==loadSequence||session()?.user.id!==uid)return;
+  const recovery=auth.recoveryPending?.();if(recovery)return renderReset(app,{auth,onSignedIn:load,brand,invitationRecovery:recovery.invitation===true,isActive:()=>session()?.user.id===uid,onSessionEnded:()=>{if(!session())renderAuth();},onRecoveryExpired:()=>{if(session()?.user.id===uid){auth.finishRecovery?.();renderAuth('recover');}}});
   if (pendingInvite) return renderInvite();
   const profile = (await db.select('profiles',`id=eq.${uid}`))[0] || {id:uid};
   const mem = await db.select('workspace_members',`user_id=eq.${uid}&select=role,workspaces(id,name,currency)`), memberships = mem.filter((m)=>m.workspaces);
@@ -135,11 +136,15 @@ async function load() {
   renderShell();
   if (readSetting(`fw-onboarding:${uid}:${S.ws.id}`)==='farm' && P.canWriteModule(S.role,'farms')) showOnboardingFarm();
 }
-function renderInvite() {
-  app.innerHTML = `<div class="center"><main class="panel">${brand()}<h1>Join your team</h1><p class="muted">Accept the workspace invitation sent to ${esc(session().user.email)}. Your access is set by the invitation.</p><div id="invite-message"></div><div class="actions">${C.button({label:'Use another account',variant:'ghost',attrs:{id:'invite-out'}})}${C.button({label:'Accept invitation',attrs:{id:'accept-invite'}})}</div>${C.button({label:'Continue without joining',variant:'ghost',attrs:{id:'skip-invite'}})}</main></div>`;
+async function renderInvite() {
+  const uid=session()?.user.id,token=pendingInvite;
+  app.innerHTML = `<div class="center"><main class="panel">${brand()}<h1>Join your team</h1><p class="muted">Accept the workspace invitation sent to ${esc(session().user.email)}. Your access is set by the invitation.</p><div id="invite-message">${C.skeletonRows({rows:2,columns:1})}</div><div id="invite-accept"></div><div class="actions">${C.button({label:'Use another account',variant:'ghost',attrs:{id:'invite-out'}})}</div>${C.button({label:'Continue without joining',variant:'ghost',attrs:{id:'skip-invite'}})}</main></div>`;
+  const message=$('#invite-message'),accept=$('#invite-accept'),current=()=>session()?.user.id===uid&&pendingInvite===token&&$('#invite-message')===message;
   $('#invite-out').onclick=signOut;
   $('#skip-invite').onclick=()=>{pendingInvite='';try{sessionStorage.removeItem('fw-invite');}catch{} load();};
-  $('#accept-invite').onclick=async(event)=>{const btn=event.currentTarget;busy(btn,true);try{const id=await db.rpc('fw_accept_invite',{p_token:pendingInvite});pendingInvite='';try{sessionStorage.removeItem('fw-invite');}catch{} if(id)await db.update('profiles',session().user.id,{active_workspace:id});toast('Invitation accepted');await load();}catch(error){$('#invite-message').innerHTML=C.notice({text:error.message,tone:'negative'});busy(btn,false);}};
+  try{const status=await auth.invitationVerification();if(!current())return;if(status.needs_recovery||!status.proof_recent){renderInvitationVerification(message,{auth,email:session().user.email,needsRecovery:status.needs_recovery,returnTo:location.hash,inviteToken:token,isActive:current});return;}message.innerHTML=C.notice({text:'Email verified. You can now accept this invitation.',tone:'positive'});accept.innerHTML=C.button({label:'Accept invitation',attrs:{id:'accept-invite'}});
+    $('#accept-invite').onclick=async(event)=>{const btn=event.currentTarget;if(!current()||btn.disabled)return;busy(btn,true);let joined=false;try{const id=await db.rpc('fw_accept_invite',{p_token:token});if(!current())return;joined=true;pendingInvite='';try{sessionStorage.removeItem('fw-invite');}catch{} if(id)try{await db.update('profiles',uid,{active_workspace:id});}catch{if(session()?.user.id===uid)toast('Invitation accepted. Choose the workspace from My workspaces if it does not open automatically.',{tone:'warning'});}if(session()?.user.id!==uid)return;toast('Invitation accepted');await load();}catch(error){if(session()?.user.id===uid&&$('#invite-message')===message){message.innerHTML=C.notice({text:(joined?'Invitation accepted, but the workspace could not be opened. ':'')+error.message,tone:'negative'});if(joined){accept.innerHTML=C.button({label:'Open my workspace',attrs:{id:'invite-open'}});$('#invite-open').onclick=()=>load().catch(error=>{message.innerHTML=C.notice({text:error.message,tone:'negative'});});}else busy(btn,false);}}};
+  }catch(error){if(current()){message.innerHTML=C.notice({title:'Invitation verification unavailable',text:error.message,tone:'warning',action:C.button({label:'Try again',variant:'secondary',attrs:{id:'invite-retry'}})});$('#invite-retry')?.addEventListener('click',renderInvite);}}
 }
 async function renderCreateWs() {
   window.onhashchange=null; const uid=session().user.id,draftId=crypto.randomUUID();let created=null,uncertain=false,currencies=[{code:'KES',name:'Kenyan shilling'}];

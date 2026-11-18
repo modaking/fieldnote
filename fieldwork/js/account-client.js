@@ -72,7 +72,10 @@ export const accountClient = {
   },
   unenrollFactor: (id) => authorized('/auth/v1/factors/' + factorId(id), { method: 'DELETE' }),
   async connectGoogle() {
-    const uid = session()?.user.id, verifier = toBase64url(crypto.getRandomValues(new Uint8Array(48)));
+    const uid = session()?.user.id, options=await auth.capabilities();sameUser(uid);
+    if(!options.google)throw fail('Google sign-in is not enabled for this app. Use your password or an email sign-in link.',400);
+    auth.clearEmailLink?.();
+    const verifier = toBase64url(crypto.getRandomValues(new Uint8Array(48)));
     try { sessionStorage.setItem('fw-pkce', JSON.stringify({ verifier, at: Date.now(), userId: uid })); }
     catch { throw fail('Allow browser storage before connecting Google.'); }
     const challenge = toBase64url(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))));

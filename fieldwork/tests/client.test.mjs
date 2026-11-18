@@ -15,8 +15,8 @@ const signedIn = (changes = {}) => ({
 });
 const turn = () => new Promise((resolve) => setImmediate(resolve));
 
-async function client({ stored = signedIn(), deferInit = false, config = { url: 'https://db.example.invalid/', anonKey: 'public-test-key' } } = {}) {
-  const values = new Map(stored ? [['fw-session', JSON.stringify(stored)]] : []);
+async function client({ stored = signedIn(),sharedValues, deferInit = false, config = { url: 'https://db.example.invalid/', anonKey: 'public-test-key' } } = {}) {
+  const values = sharedValues||new Map(stored ? [['fw-session', JSON.stringify(stored)]] : []);
   globalThis.localStorage = {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, value),
@@ -33,6 +33,7 @@ async function client({ stored = signedIn(), deferInit = false, config = { url: 
   globalThis.history = { replaceState: (_state, _title, path) => { historyCalls.push(path); const next = new URL(path, location.origin); Object.assign(location, { pathname: next.pathname, search: next.search, hash: next.hash }); } };
   const calls = [];
   let handler = ({ url, method, body }) => {
+    if (url.endsWith('/auth/v1/settings')) return reply({external:{google:true,email:true},disable_signup:false});
     if (url.includes('/auth/v1/token')) return reply(signedIn({ access_token: 'fresh-access', refresh_token: 'fresh-refresh' }));
     if (url.endsWith('/auth/v1/user')) return reply({ id: 'user-a', email: 'a@example.invalid' });
     if (method === 'GET') return reply([]);
@@ -63,6 +64,34 @@ test('single inserts and updates retain object responses and unchanged minor-uni
   assert.equal(changed.amount, 45678);
   assert.equal(JSON.parse(c.calls[1].body).amount, 45678);
   assert.equal(c.calls[1].headers.Prefer, 'return=representation');
+});
+
+test('public sign-in capabilities share one pending request and cache only verified settings',async()=>{
+  const c=await client();let finish;c.respond(()=>new Promise(resolve=>{finish=resolve;}));
+  const first=c.auth.capabilities(),second=c.auth.capabilities();await turn();assert.equal(c.calls.length,1);
+  assert.equal(c.calls[0].headers.Authorization,undefined);assert.equal(c.calls[0].headers.apikey,'public-test-key');
+  finish(reply({external:{google:false,email:true},disable_signup:true}));
+  assert.deepEqual(await first,{google:false,email:true,signup:false});assert.deepEqual(await second,await first);await c.auth.capabilities();assert.equal(c.calls.length,1);
+  c.respond(()=>reply({external:{google:true,email:true}}));assert.equal((await c.auth.capabilities({refresh:true})).google,true);assert.equal(c.calls.length,2);
+});
+
+test('disabled Google never stores a verifier or leaves the app',async()=>{
+  const c=await client();c.respond(()=>reply({external:{google:false,email:true}}));
+  await assert.rejects(c.auth.google(),{status:400,message:/not enabled/});
+  assert.equal(c.assignments.length,0);assert.equal(c.tabValues.has('fw-pkce'),false);assert.ok(c.session());assert.ok(c.calls.every(call=>call.method==='GET'));
+});
+
+test('failed or malformed provider discovery is retryable and never treated as enabled',async()=>{
+  const c=await client();c.respond(()=>reply({message:'Settings unavailable'},503));
+  await assert.rejects(c.auth.google(),{status:503});assert.equal(c.assignments.length,0);
+  c.respond(()=>reply([]));await assert.rejects(c.auth.capabilities(),/could not be verified/);
+  c.respond(()=>reply({external:{google:true,email:true}}));assert.equal((await c.auth.capabilities()).google,true);assert.equal(c.calls.length,3);
+});
+
+test('a sign-out during provider discovery prevents a delayed Google redirect',async()=>{
+  const c=await client();let finish;c.respond(({url})=>url.endsWith('/settings')?new Promise(resolve=>{finish=resolve;}):reply(null,204));
+  const pending=c.auth.google();await turn();await c.auth.signOut();finish(reply({external:{google:true}}));
+  await assert.rejects(pending,{status:409});assert.equal(c.assignments.length,0);assert.equal(c.tabValues.has('fw-pkce'),false);
 });
 
 test('bulk inserts and upserts retain their original response contracts', async () => {
@@ -232,6 +261,7 @@ test('recovery redirects validate the new token before stale stored-session refr
   assert.deepEqual(await c.init(), { type: 'recovery' });
   assert.equal(c.session().user.id, 'recovery-user');
   assert.equal(c.session().access_token, 'recovery-access');
+  assert.equal(c.auth.recoveryPending().invitation,false,'an old implicit link cannot claim invitation recovery');
   assert.deepEqual(c.historyCalls, ['/farm/?keep=1']);
   assert.equal(location.hash, '');
   assert.equal(c.calls.filter((r) => r.url.includes('grant_type=refresh_token')).length, 0);
@@ -287,7 +317,8 @@ test('magic-link sign-in never creates a new user and returns to the app path', 
   const request = c.calls[0], url = new URL(request.url);
   assert.equal(request.method, 'POST'); assert.equal(url.pathname, '/auth/v1/otp');
   assert.equal(url.searchParams.get('redirect_to'), 'https://fieldwork.example.invalid/farm/');
-  assert.deepEqual(JSON.parse(request.body), { email: 'farmer@example.invalid', create_user: false });
+  const payload=JSON.parse(request.body),proof=JSON.parse(c.values.get('fw-email-pkce'));
+  assert.equal(payload.email,'farmer@example.invalid');assert.equal(payload.create_user,false);assert.equal(payload.code_challenge_method,'s256');assert.equal(payload.code_challenge,createHash('sha256').update(proof.verifier).digest('base64url'));assert.equal(proof.type,'magiclink');
   assert.equal(c.session().user.id, 'user-a');
 });
 
@@ -310,7 +341,7 @@ test('Google sign-in stores a tab-local verifier and sends its SHA-256 challenge
   assert.equal(url.searchParams.get('provider'), 'google'); assert.equal(url.searchParams.get('code_challenge_method'), 's256');
   assert.equal(url.searchParams.get('code_challenge'), createHash('sha256').update(pending.verifier).digest('base64url'));
   assert.equal(url.searchParams.get('redirect_to'), 'https://fieldwork.example.invalid/farm/');
-  assert.ok(!url.toString().includes(pending.verifier)); assert.equal(c.calls.length, 0);
+  assert.ok(!url.toString().includes(pending.verifier)); assert.equal(c.calls.length, 1);assert.ok(c.calls[0].url.endsWith('/auth/v1/settings'));assert.equal(c.calls[0].body,undefined);
   assert.equal(c.values.has('fw-pkce'), false); assert.equal(c.session().user.id, 'user-a');
 });
 
@@ -346,6 +377,60 @@ test('missing or stale PKCE proof is rejected without erasing an existing sessio
     assert.equal(location.search, '?keep=1'); assert.equal(c.session().user.id, 'user-a');
     assert.equal(c.calls.filter((request) => request.url.includes('/auth/')).length, 0);
   }
+});
+
+test('invitation recovery sends PKCE only and restores reset purpose, account and invitation intent on callback',async()=>{
+  const c=await client();c.tabValues.set('fw-invite','a'.repeat(64));location.hash='#/account?section=invitations';c.respond(()=>reply({}));
+  await c.auth.reset(' a@example.invalid ',{invitation:true});const pending=JSON.parse(c.values.get('fw-email-pkce')),sent=JSON.parse(c.calls[0].body);
+  assert.equal(sent.code_challenge_method,'s256');assert.equal(sent.code_challenge,createHash('sha256').update(pending.verifier).digest('base64url'));assert.equal(sent.code_verifier,undefined);assert.equal(pending.expectedUserId,'user-a');
+  location.search='?code=recovery-code';location.hash='';c.respond(({body})=>{assert.deepEqual(JSON.parse(body),{auth_code:'recovery-code',code_verifier:pending.verifier});return reply(signedIn());});
+  assert.deepEqual(await c.auth.consumeRedirect(),{type:'recovery'});assert.equal(location.search,'');assert.equal(location.hash,'#/account?section=invitations');assert.equal(c.tabValues.get('fw-invite'),'a'.repeat(64));assert.equal(c.auth.recoveryPending().invitation,true);
+  c.auth.markRecoveryPasswordSaved();assert.equal(c.auth.recoveryPending().passwordSaved,true);c.auth.finishRecovery();assert.equal(c.auth.recoveryPending(),null);
+});
+
+test('invitation magic-link callback preserves intent without invoking password rotation',async()=>{
+  const c=await client();c.respond(()=>reply({}));await c.auth.magicLink('a@example.invalid',{invitation:true,returnTo:'#/account?section=invitations'});
+  location.search='?code=mailbox-proof';c.respond(()=>reply(signedIn()));assert.deepEqual(await c.auth.consumeRedirect(),{type:'magiclink'});assert.equal(c.auth.recoveryPending(),null);assert.equal(location.hash,'#/account?section=invitations');assert.ok(!c.calls.some(call=>call.method==='PUT'));
+});
+
+test('invited email callbacks reject another identity without replacing the current sign-in',async()=>{
+  const c=await client();c.respond(()=>reply({}));await c.auth.reset('a@example.invalid',{invitation:true});location.search='?code=wrong-user';
+  c.respond(()=>reply(signedIn({user:{id:'another-user',email:'a@example.invalid'}})));await assert.rejects(c.auth.consumeRedirect(),{status:401,message:/different account/});assert.equal(c.session().user.id,'user-a');assert.equal(location.search,'');assert.equal(c.auth.recoveryPending(),null);
+});
+
+test('invitation authority always comes from the checked server result, never token metadata or callback purpose',async()=>{
+  const c=await client({stored:signedIn({user:{id:'user-a',app_metadata:{fieldnote_mailbox_verified_at:'forged'},user_metadata:{verified:true}}})});
+  c.respond(()=>reply({needs_recovery:true,proof_recent:false}));assert.deepEqual(await c.auth.invitationVerification(),{needs_recovery:true,proof_recent:false});
+  c.respond(()=>reply({message:'Fresh signed recovery proof required'},403));await assert.rejects(c.auth.completeInviteRecovery(),{status:403});
+  c.respond(()=>reply({}));await assert.rejects(c.auth.invitationVerification(),/unavailable/);c.respond(()=>reply({message:'No function'},404));await assert.rejects(c.auth.invitationVerification(),/reviewed security upgrade/);
+});
+
+test('blocked shared PKCE storage prevents sending an email and keeps an existing invitation untouched',async()=>{
+  const c=await client();c.tabValues.set('fw-invite','b'.repeat(64));localStorage.setItem=()=>{throw new Error('Blocked');};
+  await assert.rejects(c.auth.reset('a@example.invalid',{invitation:true}),/same browser/);assert.equal(c.calls.length,0);assert.equal(c.tabValues.get('fw-invite'),'b'.repeat(64));
+});
+
+test('a fresh email tab consumes the shared proof once and restores invitation intent without a URL secret',async()=>{
+  const first=await client();first.tabValues.set('fw-invite','f'.repeat(64));first.respond(()=>reply({}));await first.auth.reset('a@example.invalid',{invitation:true,returnTo:'#/account?section=invitations'});
+  const binding=JSON.parse(first.values.get('fw-email-pkce'));assert.equal(binding.inviteToken,'f'.repeat(64));assert.ok(!new URL(first.calls[0].url).search.includes('f'.repeat(64)));
+  const fresh=await client({sharedValues:first.values,deferInit:true});assert.equal(fresh.tabValues.has('fw-invite'),false);location.search='?code=from-email';
+  fresh.respond(({body})=>{assert.equal(JSON.parse(body).code_verifier,binding.verifier);return reply(signedIn());});assert.deepEqual(await fresh.init(),{type:'recovery'});
+  assert.equal(fresh.values.has('fw-email-pkce'),false);assert.equal(fresh.tabValues.get('fw-invite'),'f'.repeat(64));assert.equal(fresh.auth.takeInviteIntent(),'f'.repeat(64));assert.equal(fresh.auth.takeInviteIntent(),'');assert.equal(location.hash,'#/account?section=invitations');
+  location.search='?code=from-email';const before=fresh.calls.length;await assert.rejects(fresh.auth.consumeRedirect(),/expired|another browser/);assert.equal(fresh.calls.length,before,'reused callback never exchanges without proof');
+});
+
+test('expired shared email proof is cleared and mismatched email never replaces the signed-in user',async()=>{
+  const c=await client();c.respond(()=>reply({}));await c.auth.magicLink('a@example.invalid',{invitation:true});const binding=JSON.parse(c.values.get('fw-email-pkce'));c.values.set('fw-email-pkce',JSON.stringify({...binding,at:Date.now()-901000}));
+  location.search='?code=expired';await assert.rejects(c.auth.consumeRedirect(),/expired|another browser/);assert.equal(c.values.has('fw-email-pkce'),false);
+  c.respond(()=>reply({}));await c.auth.magicLink('a@example.invalid',{invitation:true});location.search='?code=wrong-email';c.respond(()=>reply(signedIn({user:{id:'user-a',email:'someone@example.invalid'}})));await assert.rejects(c.auth.consumeRedirect(),/another account/);assert.equal(c.session().user.email,'a@example.invalid');
+});
+
+test('an older callback cannot commit over or consume a newer email-link request',async()=>{
+  const c=await client();c.respond(()=>reply({}));await c.auth.magicLink('a@example.invalid',{invitation:true});const old=JSON.parse(c.values.get('fw-email-pkce'));location.search='?code=old-code';let finish;
+  c.respond(({url})=>url.includes('grant_type=pkce')?new Promise(resolve=>finish=resolve):reply({}));const oldCallback=c.auth.consumeRedirect();await turn();await c.auth.magicLink('a@example.invalid',{invitation:true});const latest=JSON.parse(c.values.get('fw-email-pkce'));assert.notEqual(latest.verifier,old.verifier);
+  finish(reply(signedIn({access_token:'old-callback-access'})));await assert.rejects(oldCallback,{status:409});assert.equal(JSON.parse(c.values.get('fw-email-pkce')).verifier,latest.verifier);assert.equal(c.session().access_token,'access-a');
+  location.search='?code=old-code-again';c.respond(()=>reply({message:'Invalid code verifier'},400));await assert.rejects(c.auth.consumeRedirect(),{status:400});assert.equal(JSON.parse(c.values.get('fw-email-pkce')).verifier,latest.verifier,'failed old email does not erase the latest proof');
+  location.search='?code=latest-code';c.respond(({body})=>{assert.equal(JSON.parse(body).code_verifier,latest.verifier);return reply(signedIn({access_token:'latest-access'}));});assert.deepEqual(await c.auth.consumeRedirect(),{type:'magiclink'});assert.equal(c.session().access_token,'latest-access');assert.equal(c.values.has('fw-email-pkce'),false);
 });
 
 test('RPCs use authenticated JSON POST and validate function names before sending', async () => {

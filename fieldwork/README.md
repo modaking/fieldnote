@@ -4,9 +4,10 @@ Plain HTML/CSS/JavaScript, Supabase REST/Auth/Storage and Vercel `/api` function
 No build step or added runtime libraries. Architecture, stored records and ISO
 currency **minor units** are retained (KES 100 = KSh 1).
 
-This is a reviewable usability draft. **All three migrations remain uninstalled.
-All three SQL suites passed in an authorized rollback-only rehearsal on
-the current project; no schema, RLS or fixture rows were retained.** Read
+This is release preparation. **All three database upgrades were applied to the
+current Fieldnote project on 18 November 2026 at approximately 21:36 UTC, after
+approval and successful rollback rehearsals. Original farm data was preserved;
+live email/Google/MFA and other account HTTP flows still need verification.** Read
 [Ian's handoff](docs/USABILITY-HANDOFF.md) for release checks and the
 [feature inventory](docs/FEATURE-INVENTORY.md) for preservation mapping.
 
@@ -19,7 +20,7 @@ module URLs remain valid. Mobile has bottom navigation, More and floating Add;
 Ctrl/Cmd+K searches navigation and recent records.
 
 Overview separates Summary/More insights, with database-computed KPIs, comparisons,
-charts and reminders once its reviewed RPC is installed. Charts include keyboard/
+charts and reminders through its installed database RPC. Charts include keyboard/
 tap exploration, record drills, exact data tables and PNG/CSV actions. Account
 includes profile/photo, security/TOTP, own sessions, workspaces, invitations,
 notifications, own-data export and guarded deletion. Theme/default farm/default
@@ -31,42 +32,56 @@ statements with live preview, binary PDF and true XLSX section sheets, numeric
 formats, frozen headers and SUM totals. PDF fonts transliterate accents and replace
 unsupported characters; preview/XLSX preserve Unicode.
 
-## Setup and database review
+## Applied database upgrades
 
 For a **fresh disposable project only**, initialize `db/schema.sql` once. Never
-rerun it over the existing farm database. These proposals were tested through a
-separately reviewed rollback batch; permanent installation remains a separate decision:
+rerun it over the existing farm database. These files were applied through one
+reviewed atomic SQL bundle; **do not rerun the originals on the current project**:
 
 1. `db/migrations/20261118_members_roles.sql` — six roles/farm scope, invitations,
    audit restrictions, project budgets, vendor bills and enterprise financial links.
 2. `db/migrations/20261118_dashboard.sql` — RLS-bound dashboard/finance aggregates
    and a checked, server-recomputed farm month close.
 3. `db/migrations/20261118_account.sql` — own preferences/avatars/sessions,
-   optional MFA enforcement and guarded membership/account deletion behavior.
+   optional MFA enforcement, revoked-session rejection and checked invitation recovery.
 
 All three SQL suites in `db/tests/` passed on the current project inside one
 reviewed transaction with fixture-isolating savepoints and a final rollback.
-The latest run included the finance extension's 1,005-row totals and server-close
-checks, plus role/farm-scope rejections. Worker finance/pay access
-from the base schema changes only if the reviewed role migration is installed. Owner/Admin
+The latest recovery-extended run passed all three suites on its first attempt,
+including 1,005-row finance totals/server close, role/farm-scope rejections,
+invitation proof and revoked-session checks. Worker finance/pay access
+from the base schema is now restricted by the applied role migration. Owner/Admin
 manage members; only Owner manages owners/admins. Manager manages operations/money,
 Accountant money/pay, Worker field activity and Viewer operational reads.
 Restricted farm scope and redaction require database enforcement. Invitations are
 copyable email-bound links; this app does not send invitation email.
 
+Before first using incoming invitations, recover the account through a fresh
+PKCE email link, set a different password and end other sessions. The database
+requires the completed Auth password-change audit event and the actual active
+session before setting its own trusted app-metadata marker, bound to that email.
+Later invitation access needs a fresh email magic link/recovery proof; changing
+email requires recovery again. Editable user metadata is never verification.
+Email links can open in another tab of the same browser; Google keeps a separate
+tab-scoped PKCE verifier. Delivery and real callback flows still need verification.
+
 Use Vercel root `fieldwork/`, framework Other and no build command. Configure server
 `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Optional `SUPABASE_SERVICE_ROLE_KEY`
 enables guarded deletion **server-side only**; never put it in browser code, public
-configuration or source. Provider/email, redirect and Vercel environment wiring
-still need live verification. Ordinary static hosting does not serve `/api/config`
+configuration or source. The owner must configure mail delivery, Auth audit logging,
+Google credentials and redirects directly in the provider consoles. Actual deployed
+environment values and live account flows still need verification; checking variable
+names alone does not verify wiring. Ordinary static hosting does not serve `/api/config`
 or `/api/account`.
 
-Current-project checks include 44 anonymous/nonmember read-only checks and the
-separate rollback rehearsal. After the finance-extended run, all 1,299 catalog
-fingerprint items matched baseline (MD5 `992fc360118daa1d8f2398d90ba4f75b`), with
-no fixture IDs remaining across 25 reserved prefixes. Normal logs and audit
-identity sequence gaps can survive rollback; sequences were not reset. No
-migration is installed by these checks.
+The final installation used bundle SHA256
+`2c7bdf1673905e51a8e992aab74b8afb1710a52f8b8440083e6c585a6bd31993`.
+Immediate fresh read-only checks preserved all **98 original rows across 24 public
+tables** and the whole-row Auth/Storage digests; fixtures were removed before
+commit. The catalog now has 28 public tables. The earlier 1,299-item baseline
+applies to rollback rehearsals, not the installed schema. This manual SQL install
+created no Supabase CLI migration-history entry; reconcile history before future
+CLI deployment. See the handoff for source hashes and remaining checks.
 
 ## Local checks and sample preview
 
@@ -78,7 +93,7 @@ node --experimental-vm-modules --test tests/*.test.mjs db/tests/*.test.mjs
 node tools/preview.mjs
 ```
 
-Latest full run: **214 JavaScript tests pass**.
+Latest full run: **250 JavaScript tests pass**.
 Static checks resolve 22 browser modules, two APIs, 12 business routes, five pages,
 16 sections and 12 assets; all 32 configured contrast pairs pass in each theme.
 The loopback preview uses invented in-memory records,
@@ -107,8 +122,8 @@ Whole calendar periods compare with matching preceding months; arbitrary day
 ranges use equal-day comparisons. Existing worker posting retains the labeled
 four-week/26-day convention. No historical balances or allocations are invented.
 Reads paginate beyond the REST page cap; incomplete financial reads fail visibly.
-The proposed finance RPCs calculate full filtered totals and recompute month
-closing in PostgreSQL; they become available only after the reviewed migration.
+The installed finance RPCs calculate full filtered totals and recompute month
+closing in PostgreSQL. SQL fixture coverage is separate from live browser/API checks.
 
 Settings → Workspace retains a fictional-data loader for an empty KES workspace
 with all-farm write access. Unlike the memory preview, it stores records in that

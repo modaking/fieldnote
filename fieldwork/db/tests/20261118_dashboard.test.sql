@@ -21,10 +21,11 @@ begin
   end;
   raise exception 'Expected error %, succeeded: %',expected,statement;
 end $$;
-create function pg_temp.dash_actor(uid uuid) returns void language plpgsql as $$
+create function pg_temp.dash_actor(uid uuid) returns void language plpgsql security definer set search_path=pg_catalog,public as $$
 begin
+  if uid is not null and split_part(uid::text,'-',1)<>'d1000000' then raise exception 'Fixture actor required';end if;
   perform set_config('request.jwt.claim.sub',coalesce(uid::text,''),true);
-  perform set_config('request.jwt.claims',jsonb_build_object('sub',uid,'role',case when uid is null then 'anon' else 'authenticated' end)::text,true);
+  perform set_config('request.jwt.claims',jsonb_build_object('sub',uid,'role',case when uid is null then 'anon' else 'authenticated' end,'aal','aal1','session_id',uid,'email',(select email from auth.users where id=uid))::text,true);
 end $$;
 grant execute on function pg_temp.dash_assert(boolean,text),pg_temp.dash_error(text,text),pg_temp.dash_actor(uuid) to authenticated,anon;
 create temporary table dashboard_outputs(label text primary key,data jsonb);
@@ -51,6 +52,9 @@ insert into auth.users(id,email,email_confirmed_at,raw_user_meta_data,raw_app_me
  ('d1000000-0000-4000-8000-000000000005','dashboard-worker@fieldwork.invalid',now(),'{}','{}'),
  ('d1000000-0000-4000-8000-000000000006','dashboard-viewer@fieldwork.invalid',now(),'{}','{}'),
  ('d1000000-0000-4000-8000-000000000007','dashboard-outsider@fieldwork.invalid',now(),'{}','{}');
+insert into auth.sessions(id,user_id,created_at,updated_at)
+ select id,id,statement_timestamp()-interval '2 minutes',statement_timestamp() from auth.users
+ where id>='d1000000-0000-4000-8000-000000000001' and id<='d1000000-0000-4000-8000-000000000007';
 insert into public.workspaces(id,name,currency,created_by) values
  ('d2000000-0000-4000-8000-000000000001','Dashboard sample A','KES','d1000000-0000-4000-8000-000000000001'),
  ('d2000000-0000-4000-8000-000000000002','Dashboard sample B','KES','d1000000-0000-4000-8000-000000000002');
