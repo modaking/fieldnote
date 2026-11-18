@@ -38,7 +38,7 @@ export function renderAuth(container, { auth, onSignedIn, brand, invitePending =
     ${!up && !recover && !magic && !verify ? button({ label: 'Forgot password?', variant: 'ghost', attrs: { 'data-mode': 'recover' } }) : ''}
     ${recover || verify ? button({ label: 'Back to sign in', variant: 'ghost', attrs: { 'data-mode': 'in' } }) : ''}</div>
     ${!recover && !verify ? `<div id="auth-google-option" hidden><div class="auth-divider"><span>or</span></div>${button({ label: 'Continue with Google', variant: 'secondary', attrs: { id: 'google',disabled:true } })}</div><div id="auth-provider-message" aria-live="polite"></div>` : ''}
-    <p class="caption muted">${up ? 'We’ll send an email to verify your address before you start.' : 'Sign in securely with the account you use for your workspace.'}</p></main></div>`;
+    <p class="caption muted">${up ? 'Create an account to set up your farm workspace.' : 'Sign in securely with the account you use for your workspace.'}</p></main></div>`;
   const form = container.querySelector('#auth'), message = container.querySelector('#auth-message');
   const controls=[...container.querySelectorAll('button')];let requestPending=false,googleAvailable=false;
   const current=()=>container.querySelector('#auth')===form;

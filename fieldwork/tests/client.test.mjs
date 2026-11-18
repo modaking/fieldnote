@@ -293,6 +293,13 @@ test('sign-up still reports email-confirmation status without creating a fake se
   assert.equal(c.session(), null);
 });
 
+test('sign-up with an immediate authenticated response saves its valid session without requiring another sign-in',async()=>{
+  const c=await client({stored:null}),next=signedIn({access_token:'signup-access',refresh_token:'signup-refresh'});c.respond(()=>reply(next));
+  assert.deepEqual(await c.auth.signUp(' a@example.invalid ','test-password','Farm User'),{signedIn:true});
+  assert.equal(c.session().user.id,'user-a');assert.equal(c.session().access_token,'signup-access');assert.equal(c.session().refresh_token,'signup-refresh');
+  assert.equal(JSON.parse(c.values.get('fw-session')).user.id,'user-a');assert.equal(c.calls.length,1);assert.equal(new URL(c.calls[0].url).pathname,'/auth/v1/signup');
+});
+
 test('missing public configuration is reported before any authenticated request', async () => {
   const c = await client({ config: { url: 'https://db.example.invalid' }, deferInit: true });
   await assert.rejects(c.init(), { message: /Supabase is not configured/ });
