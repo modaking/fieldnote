@@ -3,10 +3,12 @@ const KEY = 'fw-theme';
 const CHROME = { light: '#F5F1E6', dark: '#0E1A14' };
 const mq = matchMedia('(prefers-color-scheme: dark)');
 
-export const getPref = () => localStorage.getItem(KEY) || 'system';
+const normalise = (pref) => ['light', 'dark', 'system'].includes(pref) ? pref : 'system';
+export const getPref = () => { try { return normalise(localStorage.getItem(KEY)); } catch { return 'system'; } };
 const resolve = (p) => (p === 'system' ? (mq.matches ? 'dark' : 'light') : p);
 
 export function applyTheme(pref = getPref()) {
+  pref = normalise(pref);
   const t = resolve(pref), root = document.documentElement;
   root.setAttribute('data-theme', t);
   root.setAttribute('data-theme-pref', pref);
@@ -17,7 +19,8 @@ export function applyTheme(pref = getPref()) {
 
 /** pref: 'light' | 'dark' | 'system'. syncRemote(pref) is injected by the app (Supabase profile update). */
 export function setPref(pref, syncRemote) {
-  localStorage.setItem(KEY, pref);
+  pref = normalise(pref);
+  try { localStorage.setItem(KEY, pref); } catch {}
   applyTheme(pref);
   syncRemote?.(pref)?.catch?.(() => {});   // best effort; localStorage wins on this device
 }

@@ -1,5 +1,9 @@
 # fieldwork. — farm management for Kenyan farms
 
+See [the usability pilot handoff](docs/USABILITY-HANDOFF.md) for this branch's
+focused fixes, verification commands and live-release checks. The existing app
+architecture, database schema, roles and minor-unit currency model are retained.
+
 Plain HTML/CSS/vanilla JS. No build step. Supabase (Postgres, Auth, Storage) + Vercel static hosting with `/api` functions.
 Status: **Stage 3** complete (budgets, closing cash, recurring payments, categories, linked filters). Next: map (stage 4).
 
