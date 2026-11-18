@@ -41,6 +41,12 @@ test('enrolled MFA blocks aal1 and a revoked session blocks even a valid fresh J
   const mfa=await run({user:{factors:[{status:'verified',factor_type:'totp'}]}});assert.equal(mfa.statusCode,403);assert.equal(mfa.calls.length,1);
   const revoked=await run({status:{session_active:false},method:'POST',body:{action:'change_password',password:'new-password'}});assert.equal(revoked.statusCode,401);assert.ok(!revoked.calls.some(c=>c.method==='PUT'));
 });
+test('database session denials stay distinct from missing migrations and temporary failures',async()=>{
+  for(const [http,code,expected,wording] of [[401,'PGRST301',401,/sign-in has ended/],[403,'42501',403,/sign in again/i],[404,'PGRST202',503,/migration must be installed/],[400,'42883',503,/migration must be installed/],[500,'XX000',503,/could not be checked/],[400,'22023',502,/could not be checked/]]){
+    const r=await run({method:'POST',body:{action:'change_password',password:'new-password'},route:c=>c.url.endsWith('/rpc/fw_account_delete_status')?reply({code,message:'upstream detail'},http):null});
+    assert.equal(r.statusCode,expected);assert.match(r.body.message,wording);assert.equal(r.calls.length,2);assert.ok(!r.calls.some(c=>c.method==='PUT'||c.method==='DELETE'));assert.ok(!JSON.stringify(r.body).includes(env.SUPABASE_SERVICE_ROLE_KEY));
+  }
+});
 test('missing backend credential, owned workspaces and shared files fail without deleting anything',async()=>{
   for(const fixture of [{key:false},{status:{owned_workspaces:[{id:'ws',name:'Farm'}]}},{status:{business_files:1}}]){
     const r=await run(fixture);assert.ok([409,503].includes(r.statusCode));assert.ok(!r.calls.some(c=>c.method==='DELETE'));assert.ok(!JSON.stringify(r.body).includes(env.SUPABASE_SERVICE_ROLE_KEY));

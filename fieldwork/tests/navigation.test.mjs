@@ -16,13 +16,14 @@ const feedbackSource = await readFile(new URL('../js/feedback.js', import.meta.u
 const routeNames = ['daily', 'finances', 'vendors', 'infrastructure', 'livestock', 'workers', 'funding'];
 const settle = async () => { await new Promise(setImmediate); };
 
-async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) {
+async function harness(viewOverrides = {}, { initialHash = '#/overview',initialInvite='',authOverrides={},initialRedirect } = {}) {
   const nodes = new Map();
   const requests = [];
   const calls = [];
   const messages = [];
   const confirmations = [], confirmationAnswers = [];
   const storage = new Map([['fw-month', '2026-11']]);
+  const tabStorage=new Map(initialInvite?[['fw-invite',initialInvite]]:[]);
   const events = new Map();
   let currentSession = { user: { id: 'user-1', email: 'farmer@example.test' } };
   let activeElement;
@@ -97,7 +98,7 @@ async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) 
   views.moduleViews=Object.fromEntries(navigation.SECTIONS.filter(s=>s.module!=='members').map(s=>[s.id,viewOverrides[s.id]||views[s.module]]));
   let contextualMembers;
   const dependencies = new Map([
-    ['./supabase.js', { init: () => new Promise(() => {}), session: () => currentSession, auth: {}, db,
+    ['./supabase.js', { init: () => initialRedirect===undefined?new Promise(() => {}):Promise.resolve(initialRedirect), session: () => currentSession, auth: authOverrides, db,
       networkState:()=>({online:true,pending:0}),subscribeNetwork:()=>()=>{},subscribeSession:()=>()=>{} }],
     ['./theme.js', { getPref: () => 'light', setPref() {} }],
     ['./modules.js', views],
@@ -120,7 +121,7 @@ async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) 
       if(section.module==='members')return members(el,local,{tab:section.id==='invitations'?'invites':'members',hideTabs:true});
       assert.equal(typeof leafViews[section.id],'function',`Missing leaf renderer ${section.id}`);return leafViews[section.id](el,local);
     },openCommandPalette:X=>calls.push({name:'command',X}),openMoreNavigation:X=>calls.push({name:'more-navigation',X})}],
-    ['./auth-ui.js', { renderAuth: (el) => { calls.push({name:'auth'}); el.innerHTML='Sign in required'; }, renderReset() {}, formErrors:()=>true, busy:(el,value)=>{el.disabled=value;} }],
+    ['./auth-ui.js', { renderAuth: (el) => { calls.push({name:'auth'}); el.innerHTML='Sign in required'; }, renderReset:(el,options)=>calls.push({name:'reset',el,options}),renderInvitationVerification:(el,options)=>calls.push({name:'invitation-verification',el,options}), formErrors:()=>true, busy:(el,value)=>{el.disabled=value;} }],
   ]);
   const context = vm.createContext({
     document, location, history, console, URLSearchParams, Event, crypto: webcrypto,
@@ -130,7 +131,7 @@ async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) 
       setItem: (key, value) => storage.set(key, String(value)),
       removeItem: (key) => storage.delete(key),
     },
-    sessionStorage: {getItem:()=>null,setItem(){},removeItem(){}},
+    sessionStorage: {getItem:key=>tabStorage.get(key)||null,setItem:(key,value)=>tabStorage.set(key,String(value)),removeItem:key=>tabStorage.delete(key)},
     matchMedia: () => ({ matches: true, addEventListener() {} }),
     setTimeout: () => 0,
     MutationObserver: class { observe() {} disconnect() {} },
@@ -157,7 +158,7 @@ async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) 
   dependencies.set('./feedback.js',feedbackModule.namespace);
   const memberModule=new vm.SourceTextModule(memberSource,{context,identifier:'members.js'});
   await memberModule.link(dependency);await memberModule.evaluate();contextualMembers=memberModule.namespace.members;
-  const module = new vm.SourceTextModule(`${source}\nexport { S, load, route, renderView, renderShell, openAddRecord, openFarm };`, { context, identifier: 'app.js',importModuleDynamically:async specifier=>{const linked=dependency(specifier);if(linked.status==='unlinked')await linked.link(()=>{});if(linked.status==='linked')await linked.evaluate();return linked;} });
+  const module = new vm.SourceTextModule(`${source}\nexport { S, load, route, renderView, renderShell, openAddRecord, openFarm,pendingInvite };`, { context, identifier: 'app.js',importModuleDynamically:async specifier=>{const linked=dependency(specifier);if(linked.status==='unlinked')await linked.link(()=>{});if(linked.status==='linked')await linked.evaluate();return linked;} });
   await module.link(dependency);
   await module.evaluate();
   Object.assign(module.namespace.S, {
@@ -166,9 +167,33 @@ async function harness(viewOverrides = {}, { initialHash = '#/overview' } = {}) 
     farms: [{ id: 'farm-a', name: 'First farm' }, { id: 'farm-b', name: 'Second farm' }],
     farmId: 'all', month: '2026-11', route: 'overview',page:'overview',section:null,
   });
-  return { api: module.namespace, feedback: feedbackModule.namespace, confirmations, answerConfirmation: answer => confirmationAnswers.push(answer), document, location, history, requests, calls, messages, get, links, storage, Element, events, db,
+  return { api: module.namespace, feedback: feedbackModule.namespace, confirmations, answerConfirmation: answer => confirmationAnswers.push(answer), document, location, history, requests, calls, messages, get, links, storage,tabStorage, Element, events, db,
     setSession: (next) => { currentSession = next; }, replaceNode: (selector, element) => nodes.set(selector, element) };
 }
+
+test('pending token invitations wait for server mailbox verification before any workspace or acceptance request',async()=>{
+  const token='c'.repeat(64),h=await harness({}, {initialInvite:token,authOverrides:{invitationVerification:async()=>({needs_recovery:true,proof_recent:false})}});
+  await h.api.load();assert.equal(h.requests.length,0);assert.equal(h.calls.at(-1).name,'invitation-verification');assert.equal(h.calls.at(-1).options.needsRecovery,true);assert.equal(h.tabStorage.get('fw-invite'),token);
+});
+
+test('a verified token invitation can accept while a missing proof service never offers acceptance',async()=>{
+  const token='d'.repeat(64),h=await harness({}, {initialInvite:token,authOverrides:{invitationVerification:async()=>({needs_recovery:false,proof_recent:true})}});
+  await h.api.load();assert.match(h.get('#invite-accept').innerHTML,/Accept invitation/);await h.get('#accept-invite').click();assert.equal(h.requests[0].rpc,'fw_accept_invite');assert.equal(h.requests[0].args.p_token,token);assert.equal(h.tabStorage.has('fw-invite'),false);
+  const failed=await harness({}, {initialInvite:token,authOverrides:{invitationVerification:async()=>{throw new Error('Reviewed security upgrade is unavailable');}}});await failed.api.load();assert.match(failed.get('#invite-message').innerHTML,/verification unavailable/);assert.equal(failed.requests.length,0);assert.equal(failed.tabStorage.get('fw-invite'),token);
+});
+
+test('recovery callback state stops before incoming invitations or workspace reads until the password and attestation finish',async()=>{
+  const h=await harness({}, {initialInvite:'e'.repeat(64),authOverrides:{recoveryPending:()=>({invitation:true,passwordSaved:false})}});await h.api.load();assert.equal(h.calls.at(-1).name,'reset');assert.equal(h.calls.at(-1).options.invitationRecovery,true);assert.equal(h.requests.length,0);
+});
+
+test('a fresh-tab callback resynchronizes the captured invitation before root recovery or invite rendering',async()=>{
+  const token='a'.repeat(64),h=await harness({}, {initialRedirect:{type:'recovery'},authOverrides:{takeInviteIntent:()=>token,recoveryPending:()=>({invitation:true,passwordSaved:false})}});await settle();assert.equal(h.api.pendingInvite,token);assert.equal(h.calls.at(-1).name,'reset');assert.equal(h.requests.length,0);
+});
+
+test('accepted membership is retained and reported even when selecting its default workspace fails',async()=>{
+  const h=await harness({}, {initialInvite:'b'.repeat(64),authOverrides:{invitationVerification:async()=>({needs_recovery:false,proof_recent:true})}});h.db.rpc=async(name,args)=>{h.requests.push({rpc:name,args});return'joined-workspace';};h.db.update=async()=>{throw new Error('Preference update offline');};
+  await h.api.load();await h.get('#accept-invite').click();assert.equal(h.api.pendingInvite,'');assert.equal(h.tabStorage.has('fw-invite'),false);assert.ok(h.messages.some(message=>/Invitation accepted.*My workspaces/.test(message)));assert.equal(h.requests.filter(request=>request.rpc==='fw_accept_invite').length,1);
+});
 
 test('navigation opens the requested module while retaining farm and month filters', async () => {
   const h = await harness();

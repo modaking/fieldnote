@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 let source=await readFile(new URL('../js/account.js',import.meta.url),'utf8');
 source=source.replace("import * as C from './components.js';",'const C={escapeHTML:value=>String(value??\'\')};')
+ .replace("import { renderInvitationVerification } from './auth-ui.js';",'const renderInvitationVerification=()=>{};')
  .replace("import { accountClient as A, prepareAvatar, sessionClaims, recentlyAuthenticated } from './account-client.js';",'const A={getUser:()=>globalThis.__accountUser()};const prepareAvatar=()=>{},sessionClaims=()=>globalThis.__accountClaims,recentlyAuthenticated=()=>false;')
  .replace("import { auth, session } from './supabase.js';",'const auth={},session=()=>null;')
  .replace("import { setPref } from './theme.js';",'const setPref=()=>{};')

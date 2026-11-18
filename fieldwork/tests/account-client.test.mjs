@@ -5,7 +5,7 @@ const source=await readFile(new URL('../js/account-client.js',import.meta.url),'
 const uid='ab000000-0000-4000-8000-000000000001',factor='ab000000-0000-4000-8000-000000000002';
 async function client(){
   const calls=[],adopted=[];let current={user:{id:uid,email:'me@example.invalid'},access_token:'access'},user={id:uid,email:'me@example.invalid',factors:[]};
-  globalThis.__accountTest={session:()=>current,auth:{syncUser(){},async adoptSession(s){adopted.push(s);}},getPublicConfig:()=>({url:'https://db.example.invalid',anonKey:'public-key'}),authorized:async(path,opts)=>{calls.push({path,...opts});if(path==='/auth/v1/user')return user;if(path.endsWith('/challenge'))return{id:'challenge'};if(path.endsWith('/verify'))return{user:{id:uid},access_token:'verified',refresh_token:'refresh'};return{};}};
+  globalThis.__accountTest={session:()=>current,auth:{syncUser(){},capabilities:async()=>({google:false,email:true}),async adoptSession(s){adopted.push(s);}},getPublicConfig:()=>({url:'https://db.example.invalid',anonKey:'public-key'}),authorized:async(path,opts)=>{calls.push({path,...opts});if(path==='/auth/v1/user')return user;if(path.endsWith('/challenge'))return{id:'challenge'};if(path.endsWith('/verify'))return{user:{id:uid},access_token:'verified',refresh_token:'refresh'};return{};}};
   const replaced=source.replace("import { authorized, getPublicConfig, session, auth } from './supabase.js';",'const {authorized,getPublicConfig,session,auth}=globalThis.__accountTest;');
   const api=await import('data:text/javascript;base64,'+Buffer.from(replaced).toString('base64')+'#'+(++n));return{...api,calls,adopted,setSession:s=>current=s,setUser:u=>user={...user,...u}};
 }
@@ -43,4 +43,14 @@ test('Google removal uses the current own identity UUID and keeps a remaining si
 test('Google removal rejects stale/malformed identity details without issuing DELETE',async()=>{
   const c=await client();c.setUser({identities:[{provider:'email',identity_id:uid}]});await assert.rejects(c.accountClient.unlinkGoogle(),/not connected/);
   c.setUser({identities:[{provider:'email',identity_id:uid},{provider:'google',id:'google-subject'}]});await assert.rejects(c.accountClient.unlinkGoogle(),/details are unavailable/);assert.ok(!c.calls.some(call=>call.method==='DELETE'));
+});
+
+test('Google linking checks public capability before storing secrets or requesting an authorization URL',async()=>{
+  const c=await client();await assert.rejects(c.accountClient.connectGoogle(),/not enabled/);assert.equal(c.calls.length,0);
+});
+
+test('password changes forward current password and nonce only to the own-account server endpoint',async()=>{
+  const c=await client();let sent;globalThis.fetch=async(path,options)=>{sent={path,...options};return new Response(JSON.stringify({user:{id:uid}}));};
+  await c.accountClient.changePassword('new-password','123456','current-password');
+  assert.equal(sent.path,'/api/account');assert.deepEqual(JSON.parse(sent.body),{action:'change_password',password:'new-password',nonce:'123456',current_password:'current-password'});assert.equal(sent.headers.apikey,undefined);
 });

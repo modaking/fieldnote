@@ -47,7 +47,13 @@ function createHandler({ fetch: fetcher = globalThis.fetch, env = process.env, n
       // A signed access JWT can outlive logout. The checked, caller-scoped RPC
       // requires the actual session to remain active before sensitive actions.
       const status=await request('/rest/v1/rpc/fw_account_delete_status',{method:'POST',body:{}});
-      if(!status.ok||status.data?.schema_version!=='20261118-account')throw problem(503,'The reviewed account migration must be installed before security changes or deletion are available.');
+      if(!status.ok){
+        if(status.status===401)throw problem(401,'This sign-in has ended. Sign in again to continue.');
+        if(status.status===403)throw problem(403,'This sign-in cannot manage your account. Sign in again and verify your authenticator if prompted.');
+        if([400,404].includes(status.status)&&['PGRST202','42883'].includes(status.data?.code))throw problem(503,'The reviewed account migration must be installed before security changes or deletion are available.');
+        throw problem(status.status>=500?503:502,'Account access could not be checked. Try again, or ask your workspace administrator to review account setup.');
+      }
+      if(status.data?.schema_version!=='20261118-account')throw problem(503,'The reviewed account migration must be installed before security changes or deletion are available.');
       if(!status.data.session_active)throw problem(401,'This sign-in has ended. Sign in again to continue.');
       if(req.method==='POST'){
         let patch;

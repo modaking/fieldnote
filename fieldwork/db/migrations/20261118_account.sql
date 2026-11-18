@@ -3,12 +3,19 @@
 -- Adds own profile preferences, own notification preferences, private avatars and
 -- checked account/session/invitation RPCs. Session metadata is READ-ONLY auth data.
 -- BEHAVIOR: verified opt-in MFA requires aal2 for app data/RPCs; no forced enrollment.
+-- BEHAVIOR: app access requires an active own Auth session, including after logout.
+-- Incoming invitations require recent signed email proof and one completed email
+-- recovery/password rotation. Only the checked completion RPC writes trusted
+-- mailbox/email markers; user_metadata and password-hash changes are not proof.
 -- BEHAVIOR: account deletion/leave is blocked for ANY workspace owner until transfer.
 -- Future account deletion nulls creator/assignee FKs while retaining business rows
 -- and historical audit records. Shared business files require ownership transfer.
 begin;
 do $$ begin
   if to_regprocedure('public.fw_access_context(uuid)') is null then raise exception 'Apply 20261118_members_roles.sql first'; end if;
+  if exists(select 1 from auth.users where coalesce(raw_app_meta_data,'{}'::jsonb) ?| array['fieldnote_mailbox_verified_at','fieldnote_mailbox_verified_email']) then
+    raise exception 'Reserved invitation-verification metadata already exists; review before applying this proposal';
+  end if;
 end $$;
 
 alter table public.profiles add column if not exists phone text;
@@ -33,17 +40,102 @@ grant select,insert,update,delete on public.account_notification_preferences to 
 drop policy if exists fw_notifications_self on public.account_notification_preferences;
 create policy fw_notifications_self on public.account_notification_preferences for all to authenticated using(user_id=auth.uid()) with check(user_id=auth.uid());
 
+create or replace function fw_private.account_session_ok() returns boolean
+language sql stable security definer set search_path=pg_catalog,public as $$
+  select auth.uid() is not null and exists(select 1 from auth.sessions s
+    where s.user_id=auth.uid() and s.id::text=auth.jwt()->>'session_id'
+      and (to_jsonb(s)->>'not_after' is null or (to_jsonb(s)->>'not_after')::timestamptz>statement_timestamp()))
+$$;
 create or replace function fw_private.account_aal_ok() returns boolean
 language sql stable security definer set search_path=pg_catalog,public as $$
-  select auth.uid() is not null and exists(select 1 from auth.users u where u.id=auth.uid())
+  select fw_private.account_session_ok() and exists(select 1 from auth.users u where u.id=auth.uid())
     and (auth.jwt()->>'aal'='aal2' or not exists(select 1 from auth.mfa_factors f where f.user_id=auth.uid() and f.status='verified'))
 $$;
 create or replace function fw_private.require_account() returns uuid
 language plpgsql stable security definer set search_path=pg_catalog,public as $$
 begin
   if auth.uid() is null then raise exception 'Sign in to manage your account' using errcode='42501'; end if;
+  if auth.jwt()->>'client_id' is not null then raise exception 'Sign in directly to manage your account' using errcode='42501'; end if;
+  if not fw_private.account_session_ok() then raise exception 'This sign-in has ended. Sign in again to continue.' using errcode='42501'; end if;
   if not fw_private.account_aal_ok() then raise exception 'Verify your authenticator to continue' using errcode='42501'; end if;
   return auth.uid();
+end $$;
+create or replace function public.fw_access_context(p_workspace_id uuid) returns jsonb
+language plpgsql stable security definer set search_path=pg_catalog,public as $$
+declare uid uuid:=fw_private.require_account(); m public.workspace_members; ids uuid[];
+begin
+  select * into m from public.workspace_members where workspace_id=p_workspace_id and user_id=uid;
+  if not found then raise exception 'You are not a member of this workspace' using errcode='42501';end if;
+  select coalesce(array_agg(f.farm_id order by f.farm_id),'{}'::uuid[]) into ids from public.workspace_member_farms f
+    where f.workspace_id=p_workspace_id and f.user_id=uid;
+  return jsonb_build_object('schema_version','20261118','role',m.role,'farm_scope',m.farm_scope,'farm_ids',ids);
+end $$;
+
+-- Only PKCE email recovery/magic-link AMR values count. Generic OTP also covers
+-- SMS and is deliberately excluded. The JWT is verified by the project's API;
+-- compare its current email/session to Auth data, never editable user metadata.
+create or replace function fw_private.invitation_email_proof(recovery_only boolean default false) returns timestamptz
+language plpgsql stable security definer set search_path=pg_catalog,public as $$
+declare email_address text; item jsonb; proof timestamptz; latest timestamptz;
+begin
+  if not fw_private.account_session_ok() or auth.jwt()->>'client_id' is not null then return null;end if;
+  select lower(email) into email_address from auth.users where id=auth.uid() and email_confirmed_at is not null;
+  if email_address is null or email_address='' or lower(auth.jwt()->>'email') is distinct from email_address then return null;end if;
+  for item in select value from jsonb_array_elements(case when jsonb_typeof(auth.jwt()->'amr')='array' then auth.jwt()->'amr' else '[]'::jsonb end) loop
+    if not coalesce(item->>'method'=any(case when recovery_only then array['recovery'] else array['recovery','magiclink'] end),false)
+      or jsonb_typeof(item->'timestamp') is distinct from 'number' then continue;end if;
+    begin proof:=to_timestamp((item->>'timestamp')::double precision);exception when others then continue;end;
+    if proof>=statement_timestamp()-interval '10 minutes' and proof<=statement_timestamp()+interval '30 seconds' then latest:=greatest(latest,proof);end if;
+  end loop;
+  return latest;
+end $$;
+create or replace function fw_private.invitation_mailbox_verified() returns boolean
+language plpgsql stable security definer set search_path=pg_catalog,public as $$
+declare data jsonb; email_address text; verified_at timestamptz;
+begin
+  select raw_app_meta_data,lower(email) into data,email_address from auth.users where id=auth.uid() and email_confirmed_at is not null;
+  if email_address is null or jsonb_typeof(data->'fieldnote_mailbox_verified_at') is distinct from 'string'
+    or data->>'fieldnote_mailbox_verified_email' is distinct from email_address then return false;end if;
+  begin verified_at:=(data->>'fieldnote_mailbox_verified_at')::timestamptz;exception when others then return false;end;
+  return isfinite(verified_at) and verified_at<=statement_timestamp()+interval '30 seconds';
+end $$;
+create or replace function public.fw_invitation_verification() returns jsonb
+language plpgsql stable security definer set search_path=pg_catalog,public as $$
+begin
+  perform fw_private.require_account();
+  return jsonb_build_object('needs_recovery',not fw_private.invitation_mailbox_verified(),'proof_recent',fw_private.invitation_email_proof() is not null);
+end $$;
+create or replace function fw_private.require_invitation_verification() returns uuid
+language plpgsql stable security definer set search_path=pg_catalog,public as $$
+declare uid uuid:=fw_private.require_account();
+begin
+  if not fw_private.invitation_mailbox_verified() then raise exception 'Recover your account by email, set a new password and end other sessions before using invitations.' using errcode='42501';end if;
+  if fw_private.invitation_email_proof() is null then raise exception 'Open a fresh email verification link before using invitations.' using errcode='42501';end if;
+  return uid;
+end $$;
+create or replace function public.fw_complete_invite_recovery() returns jsonb
+language plpgsql volatile security definer set search_path=pg_catalog,public as $$
+declare uid uuid:=fw_private.require_account(); proof timestamptz; started timestamptz; email_address text; metadata jsonb;
+begin
+  -- Serialize with password/email changes. No password or hash is read/stored.
+  select lower(email),coalesce(raw_app_meta_data,'{}'::jsonb) into email_address,metadata from auth.users where id=uid for update;
+  if jsonb_typeof(metadata) is distinct from 'object' then raise exception 'Account metadata needs administrator review before invitation verification.' using errcode='42501';end if;
+  proof:=fw_private.invitation_email_proof(true);
+  if proof is null then raise exception 'Open a fresh email recovery link before completing invitation verification.' using errcode='42501';end if;
+  select s.created_at into started from auth.sessions s where s.user_id=uid and s.id::text=auth.jwt()->>'session_id';
+  if started is null or exists(select 1 from auth.sessions s where s.user_id=uid and s.id::text<>auth.jwt()->>'session_id'
+    and (to_jsonb(s)->>'not_after' is null or (to_jsonb(s)->>'not_after')::timestamptz>statement_timestamp())) then
+    raise exception 'End all other sign-ins before completing invitation verification.' using errcode='42501';
+  end if;
+  -- Auth's completed-password event is authoritative. A hash may also change
+  -- during routine login re-encryption, so encrypted_password is never evidence.
+  if not exists(select 1 from auth.audit_log_entries a where a.payload->>'action'='user_updated_password' and a.payload->>'actor_id'=uid::text
+    and a.created_at>=greatest(proof,started) and a.created_at<=statement_timestamp()+interval '30 seconds') then
+    raise exception 'Set a different password using this recovery link before completing invitation verification. If it was just saved, retry shortly.' using errcode='42501';
+  end if;
+  update auth.users set raw_app_meta_data=coalesce(raw_app_meta_data,'{}'::jsonb)||jsonb_build_object(
+    'fieldnote_mailbox_verified_at',clock_timestamp(),'fieldnote_mailbox_verified_email',email_address) where id=uid;
+  return public.fw_invitation_verification();
 end $$;
 create or replace function public.fw_role(ws uuid) returns text language sql stable security definer set search_path=pg_catalog,public as $$
   select m.role from public.workspace_members m where m.workspace_id=ws and m.user_id=auth.uid() and fw_private.account_aal_ok()
@@ -138,7 +230,7 @@ end $$;
 
 create or replace function public.fw_account_invites() returns jsonb
 language plpgsql stable security definer set search_path=pg_catalog,public as $$
-declare uid uuid:=fw_private.require_account(); email_address text; result jsonb;
+declare uid uuid:=fw_private.require_invitation_verification(); email_address text; result jsonb;
 begin
   select lower(email) into email_address from auth.users where id=uid and email_confirmed_at is not null;
   select coalesce(jsonb_agg(jsonb_build_object('id',i.id,'workspace_id',w.id,'workspace_name',w.name,'role',i.role,'farm_ids',i.farm_ids,'expires_at',i.expires_at) order by i.created_at desc),'[]') into result
@@ -149,7 +241,7 @@ alter table public.workspace_invites drop constraint if exists workspace_invites
 alter table public.workspace_invites add constraint workspace_invites_status_check check(status in ('pending','accepted','revoked','declined'));
 create or replace function fw_private.accept_account_invite(invite_id uuid) returns uuid
 language plpgsql security definer set search_path=pg_catalog,public as $$
-declare uid uuid:=fw_private.require_account(); ws uuid; invitation public.workspace_invites; recipient text; inviter_role text;
+declare uid uuid:=fw_private.require_invitation_verification(); ws uuid; invitation public.workspace_invites; recipient text; inviter_role text;
 begin
   select lower(email) into recipient from auth.users where id=uid and email_confirmed_at is not null;
   select workspace_id into ws from public.workspace_invites where id=invite_id;
@@ -173,14 +265,14 @@ create or replace function public.fw_accept_invite(p_token text) returns uuid
 language plpgsql security definer set search_path=pg_catalog,public as $$
 declare target uuid;
 begin
-  perform fw_private.require_account();
+  perform fw_private.require_invitation_verification();
   if p_token is null or p_token!~'^[0-9a-fA-F]{64}$' then raise exception 'This invitation is invalid or has expired' using errcode='42501'; end if;
   select id into target from public.workspace_invites where token_hash=fw_private.token_hash(p_token);
   return fw_private.accept_account_invite(target);
 end $$;
 create or replace function public.fw_decline_account_invite(p_invite_id uuid) returns void
 language plpgsql security definer set search_path=pg_catalog,public as $$
-declare uid uuid:=fw_private.require_account(); recipient text;
+declare uid uuid:=fw_private.require_invitation_verification(); recipient text;
 begin
   select lower(email) into recipient from auth.users where id=uid and email_confirmed_at is not null;
   update public.workspace_invites set status='declined' where id=p_invite_id and email=recipient and status='pending';
@@ -189,13 +281,15 @@ end $$;
 
 create or replace function public.fw_account_export() returns jsonb
 language plpgsql stable security definer set search_path=pg_catalog,public as $$
-declare uid uuid:=fw_private.require_account(); identity_data jsonb; data jsonb;
+declare uid uuid:=fw_private.require_account(); identity_data jsonb; data jsonb; invitations_available boolean;
 begin
   select jsonb_build_object('id',id,'email',email,'email_confirmed_at',email_confirmed_at,'phone',phone,'phone_confirmed_at',phone_confirmed_at,'created_at',created_at,'last_sign_in_at',last_sign_in_at,'user_metadata',raw_user_meta_data)
     into identity_data from auth.users where id=uid;
   data:=public.fw_account_context();
+  invitations_available:=fw_private.invitation_mailbox_verified() and fw_private.invitation_email_proof() is not null;
   return jsonb_build_object('exported_at',now(),'scope','Your account, preferences and memberships. Shared farm records remain available through authorized module reports. Passwords, tokens, MFA secrets and other members are excluded.',
-    'identity',identity_data,'profile',data->'profile','notification_preferences',data->'notifications','memberships',public.fw_account_workspaces(),'pending_invitations',public.fw_account_invites());
+    'identity',identity_data,'profile',data->'profile','notification_preferences',data->'notifications','memberships',public.fw_account_workspaces(),
+    'pending_invitations_available',invitations_available,'pending_invitations',case when invitations_available then public.fw_account_invites() else '[]'::jsonb end);
 end $$;
 create or replace function public.fw_account_delete_status() returns jsonb
 language plpgsql stable security definer set search_path=pg_catalog,public as $$
@@ -241,11 +335,13 @@ end $$;
 drop trigger if exists fw_account_delete_guard on auth.users;
 create trigger fw_account_delete_guard before delete on auth.users for each row execute function fw_private.account_delete_guard();
 
-revoke all on function fw_private.account_aal_ok(),fw_private.require_account(),fw_private.profile_settings_guard(),fw_private.own_avatar_path(text),fw_private.accept_account_invite(uuid),fw_private.account_delete_guard() from public,anon,authenticated;
+revoke all on function fw_private.account_session_ok(),fw_private.account_aal_ok(),fw_private.require_account(),fw_private.profile_settings_guard(),fw_private.own_avatar_path(text),
+  fw_private.invitation_email_proof(boolean),fw_private.invitation_mailbox_verified(),fw_private.require_invitation_verification(),
+  fw_private.accept_account_invite(uuid),fw_private.account_delete_guard() from public,anon,authenticated;
 grant execute on function fw_private.account_aal_ok(),fw_private.own_avatar_path(text) to authenticated;
 do $$ declare f record; begin
   for f in select p.oid::regprocedure signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
-    and p.proname in('fw_account_workspaces','fw_account_context','fw_account_sessions','fw_leave_workspace','fw_account_invites','fw_accept_account_invite','fw_accept_invite','fw_decline_account_invite','fw_account_export','fw_account_delete_status') loop
+    and p.proname in('fw_account_workspaces','fw_account_context','fw_account_sessions','fw_leave_workspace','fw_account_invites','fw_accept_account_invite','fw_accept_invite','fw_decline_account_invite','fw_account_export','fw_account_delete_status','fw_access_context','fw_invitation_verification','fw_complete_invite_recovery') loop
     execute format('revoke all on function %s from public,anon',f.signature);
     execute format('grant execute on function %s to authenticated',f.signature);
   end loop;

@@ -264,6 +264,8 @@ async function rpc(req,res,name,identity) {
   const uid=user(identity).id,profile=tables.profiles.find(p=>p.id===uid),notifications=tables.account_notification_preferences.find(p=>p.user_id===uid)||{user_id:uid,in_app:true,email:false,tasks:true,bills:true,invitations:true};
   const myWorkspaces=()=>tables.workspace_members.filter(m=>m.user_id===uid).map(m=>({...tables.workspaces.find(w=>w.id===m.workspace_id),role:m.role,farm_scope:m.farm_scope}));
   const myInvites=()=>tables.workspace_invites.filter(i=>i.email===user(identity).email&&i.status==='pending'&&new Date(i.expires_at)>new Date());
+  if(name==='fw_invitation_verification')return json(res,200,{needs_recovery:true,proof_recent:false});
+  if(name==='fw_complete_invite_recovery')return fail('Email recovery is disconnected in this LOCAL SAMPLE. No real mailbox or recovery proof can be verified.');
   if(name==='fw_account_context')return json(res,200,{schema_version:'20261118-account',profile,notifications});
   if(name==='fw_account_workspaces')return json(res,200,myWorkspaces());
   if(name==='fw_account_sessions')return json(res,200,{available:true,sessions:[{id:`preview-session-${identity}`,created_at:at,updated_at:new Date().toISOString(),user_agent:'Local sample browser (simulated)',ip:'127.0.0.1',current:true}]});
@@ -370,6 +372,7 @@ export async function previewRequest(req, res) {
     }
     if (url.pathname.startsWith('/__preview/auth/v1/')) {
       const data = req.method === 'GET' ? {} : await body(req);
+      if(url.pathname.endsWith('/settings')&&req.method==='GET')return json(res,200,{external:{google:false,email:true},disable_signup:false});
       if (url.pathname.endsWith('/token') || url.pathname.endsWith('/signup')) {
         const role = roles.find((r) => data.email?.toLowerCase()===`${r}@fieldwork.test` || data.refresh_token === `preview-refresh-${r}`);
         if(!role)return failure(res,400,'Use owner, admin, manager, accountant, worker or viewer @fieldwork.test with a dummy password.');

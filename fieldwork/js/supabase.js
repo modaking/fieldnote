@@ -2,6 +2,7 @@
 const K = 'fw-session';
 let C = null;
 let memory = null, storageBlocked = false, refreshing = null;
+let capabilityCache = null;
 let authEpoch = 0;
 const sessionListeners=new Set(),networkListeners=new Set();let requests=0,networkError='';
 export const networkState=()=>({online:typeof navigator==='undefined'||navigator.onLine!==false,pending:requests,error:networkError});
@@ -34,7 +35,7 @@ const currentUser = (uid) => {
   if (!session() || session().user.id !== uid) throw error('Your sign-in changed. Please sign in and try again.', 401);
 };
 if (typeof window !== 'undefined') {
-  window.addEventListener('storage', (event) => { if (event.key === K) authEpoch++; });
+  window.addEventListener('storage', (event) => { if (event.key === K||event.key==='fw-email-pkce') authEpoch++; });
   window.addEventListener('online',notifyNetwork);window.addEventListener('offline',notifyNetwork);
 }
 export const getPublicConfig = () => C ? { ...C } : null;
@@ -79,6 +80,7 @@ export async function init() {
     throw error('Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY in Vercel.');
   }
   C = { url: j.url.replace(/\/+$/, ''), anonKey: j.anonKey };
+  readEmailPending();
   const redirect = await auth.consumeRedirect();
   if (redirect) return redirect;
   const s = session();
@@ -144,16 +146,57 @@ export async function authorized(path, opts = {}) {
 
 const redirectTo = () => encodeURIComponent(location.origin + location.pathname);
 const PKCE = 'fw-pkce';
+const EMAIL_PKCE = 'fw-email-pkce';
+const RECOVERY = 'fw-recovery';
+let recoveryMemory=null,callbackInvite='';
 const base64url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const sessionId=()=>{try{return JSON.parse(atob(session().access_token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).session_id||null;}catch{return null;}};
+const storeRecovery=state=>{recoveryMemory=state;try{sessionStorage.setItem(RECOVERY,JSON.stringify(state));}catch{}};
+const recoveryState=()=>{let state=recoveryMemory;try{state=JSON.parse(sessionStorage.getItem(RECOVERY))||state;}catch{}if(state?.userId===session()?.user.id&&state.sessionId===sessionId()&&Date.now()-state.at>=0&&Date.now()-state.at<1800000)return state;return null;};
+const readEmailPending=()=>{try{const raw=localStorage.getItem(EMAIL_PKCE);if(!raw)return null;const state=JSON.parse(raw),age=Date.now()-state?.at;if(typeof state?.verifier==='string'&&/^[A-Za-z0-9_-]{64}$/.test(state.verifier)&&['recovery','magiclink'].includes(state.type)&&typeof state.email==='string'&&Number.isFinite(age)&&age>=0&&age<=900000)return state;localStorage.removeItem(EMAIL_PKCE);}catch{}return null;};
+const clearEmailPending=verifier=>{try{if(!verifier||JSON.parse(localStorage.getItem(EMAIL_PKCE))?.verifier===verifier)localStorage.removeItem(EMAIL_PKCE);}catch{}};
+async function emailPKCE(type,email,{invitation=false,returnTo=location.hash,inviteToken=''}={}){
+  const epoch=authEpoch,expectedUserId=invitation?session()?.user.id:null,address=String(email||'').trim();
+  if(invitation&&!expectedUserId)throw error('Sign in before verifying an invitation.',401);
+  const verifier=base64url(crypto.getRandomValues(new Uint8Array(48))),challenge=base64url(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(verifier))));
+  requireAuthEpoch(epoch);
+  try{inviteToken=inviteToken||sessionStorage.getItem('fw-invite')||'';}catch{}if(!/^[0-9a-f]{64}$/i.test(inviteToken))inviteToken='';
+  const pending={verifier,at:Date.now(),type,email:address.toLowerCase(),invitation:Boolean(invitation||type==='recovery'&&inviteToken),...(inviteToken?{inviteToken}:{}),...(expectedUserId?{expectedUserId}:{}),returnTo:/^#\/[a-z][a-z0-9/-]*(?:\?[^#]*)?$/i.test(returnTo||'')?returnTo:''};
+  try{const encoded=JSON.stringify(pending);localStorage.setItem(EMAIL_PKCE,encoded);if(localStorage.getItem(EMAIL_PKCE)!==encoded)throw new Error('Storage unavailable');}catch{clearEmailPending(verifier);throw error('Allow browser storage, then request a new email link. Open it in this same browser.');}
+  try{sessionStorage.removeItem(PKCE);}catch{}
+  try{await raw(`/auth/v1/${type==='recovery'?'recover':'otp'}?redirect_to=${redirectTo()}`,{method:'POST',body:{email:address,...(type==='magiclink'?{create_user:false}:{}),code_challenge:challenge,code_challenge_method:'s256'}});requireAuthEpoch(epoch);}
+  catch(failure){clearEmailPending(verifier);throw failure;}
+}
+const invitationStatus=value=>{if(typeof value?.needs_recovery!=='boolean'||typeof value.proof_recent!=='boolean')throw error('Invitation verification is unavailable. Ask your workspace administrator to finish the reviewed security upgrade.',503);return{needs_recovery:value.needs_recovery,proof_recent:value.proof_recent};};
 export const auth = {
-  async magicLink(email) {
-    await raw('/auth/v1/otp?redirect_to=' + redirectTo(), { method: 'POST', body: { email: email.trim(), create_user: false } });
+  recoveryPending:recoveryState,
+  isRecoverySession:state=>Boolean(state&&state.userId===session()?.user.id&&state.sessionId===sessionId()),
+  takeInviteIntent(){const token=callbackInvite;callbackInvite='';return token;},
+  clearEmailLink:()=>clearEmailPending(),
+  markRecoveryPasswordSaved(){const state=recoveryState();if(state){state.passwordSaved=true;storeRecovery(state);}},
+  finishRecovery(){recoveryMemory=null;try{sessionStorage.removeItem(RECOVERY);}catch{}},
+  async invitationVerification(){try{return invitationStatus(await authorized('/rest/v1/rpc/fw_invitation_verification',{method:'POST',body:{}}));}catch(failure){if([400,404].includes(failure.status))throw error('Invitation verification is unavailable. Ask your workspace administrator to finish the reviewed security upgrade.',failure.status);throw failure;}},
+  async completeInviteRecovery(){const status=invitationStatus(await authorized('/rest/v1/rpc/fw_complete_invite_recovery',{method:'POST',body:{}}));if(status.needs_recovery||!status.proof_recent)throw error('Email verification is incomplete. Request a new recovery link before joining a workspace.',403);return status;},
+  async capabilities({refresh:reload=false}={}) {
+    if(!C)throw error('The app is not configured yet. Refresh and try again.');
+    if(!reload&&capabilityCache?.url===C.url&&capabilityCache.expires>Date.now())return capabilityCache.promise;
+    const pending={url:C.url,expires:Date.now()+300000};
+    pending.promise=(async()=>{try{
+      const settings=await raw('/auth/v1/settings');
+      if(!settings?.external||typeof settings.external!=='object'||Array.isArray(settings.external))throw error('Sign-in options could not be verified. Try again.',502);
+      return Object.freeze({google:settings.external.google===true,email:settings.external.email===true,signup:settings.disable_signup!==true});
+    }catch(failure){if(capabilityCache===pending)capabilityCache=null;throw failure;}})();
+    capabilityCache=pending;return pending.promise;
   },
+  magicLink:(email,options)=>emailPKCE('magiclink',email,options),
   async resendVerification(email) {
     await raw('/auth/v1/resend?redirect_to=' + redirectTo(), { method: 'POST', body: { email: email.trim(), type: 'signup' } });
   },
   async google() {
     const epoch = ++authEpoch;
+    const options=await auth.capabilities();requireAuthEpoch(epoch);
+    if(!options.google)throw error('Google sign-in is not enabled for this app. Use your password or an email sign-in link.',400);
+    clearEmailPending();
     const verifier = base64url(crypto.getRandomValues(new Uint8Array(48)));
     try { sessionStorage.setItem(PKCE, JSON.stringify({ verifier, at: Date.now() })); }
     catch { throw error('Allow browser storage to continue with Google. You can also sign in with your email.'); }
@@ -173,7 +216,7 @@ export const auth = {
     const next = pack(await raw('/auth/v1/token?grant_type=password', { method: 'POST', body: { email: email.trim(), password } }));
     requireAuthEpoch(epoch); save(next);
   },
-  async reset(email) { await raw('/auth/v1/recover?redirect_to=' + redirectTo(), { method: 'POST', body: { email: email.trim() } }); },
+  reset:(email,options)=>emailPKCE('recovery',email,options),
   async updatePassword(password, nonce) {
     if (typeof password !== 'string' || password.length < 8) throw error('Use a password with at least 8 characters.', 400);
     const user = await authorized('/auth/v1/user', { method: 'PUT', body: { password, ...(nonce ? { nonce } : {}) } });
@@ -188,15 +231,21 @@ export const auth = {
       const message = query.get('error_description'); query.delete('error_description'); query.delete('error');
       history.replaceState(null, '', location.pathname + (query.size ? '?' + query : '') + location.hash);
       if (message) throw error(message, 400);
-      let pending;
-      try { pending = JSON.parse(sessionStorage.getItem(PKCE)); sessionStorage.removeItem(PKCE); } catch {}
+      let pending=readEmailPending(),emailFlow=Boolean(pending);
+      if(!pending)try { pending = JSON.parse(sessionStorage.getItem(PKCE)); sessionStorage.removeItem(PKCE); } catch {}
       const age = Date.now() - pending?.at;
       if (typeof pending?.verifier !== 'string' || !pending.verifier || !Number.isFinite(pending.at) || !Number.isFinite(age) || age < 0 || age > 15 * 60 * 1000) throw error('This sign-in link expired or was opened in another browser. Start sign-in again here.', 400);
       const next = pack(await raw('/auth/v1/token?grant_type=pkce', { method: 'POST', body: { auth_code: code, code_verifier: pending.verifier } }));
       const expectedUser=pending.expectedUserId||pending.userId;
-      if(expectedUser&&(next.user.id!==expectedUser||(session()&&session().user.id!==expectedUser)))throw error('Google returned a different account. Sign in to the original account and try linking again.',401);
+      if(expectedUser&&(next.user.id!==expectedUser||(session()&&session().user.id!==expectedUser)))throw error('This link returned a different account. Sign in to the original account and request a new link.',401);
+      if(pending.email&&String(next.user.email||'').toLowerCase()!==pending.email)throw error('This email link belongs to another account. Request a new link for your current email.',401);
+      if(emailFlow&&readEmailPending()?.verifier!==pending.verifier)throw error('A newer email link replaced this request. Open the latest email link.',409);
       requireAuthEpoch(epoch); save(next);
-      return { type: 'oauth' };
+      const type=['recovery','magiclink'].includes(pending.type)?pending.type:'oauth';
+      if(type==='recovery')storeRecovery({userId:next.user.id,sessionId:sessionId(),at:Date.now(),invitation:pending.invitation===true,passwordSaved:false});
+      if(emailFlow){clearEmailPending(pending.verifier);if(/^[0-9a-f]{64}$/i.test(pending.inviteToken||'')){callbackInvite=pending.inviteToken;try{sessionStorage.setItem('fw-invite',callbackInvite);}catch{}}}
+      if(pending.returnTo)history.replaceState(null,'',location.pathname+location.search+pending.returnTo);
+      return {type};
     }
     const p = new URLSearchParams(location.hash.replace(/^#\/?/, ''));
     if (!p.has('access_token') && !p.has('error') && !p.has('error_description')) return null;
@@ -209,13 +258,18 @@ export const auth = {
     const user = await raw('/auth/v1/user', { token: access_token });
     requireAuthEpoch(epoch);
     save(pack({ access_token, refresh_token, user, expires_at: p.get('expires_at'), expires_in: p.get('expires_in') }));
+    // Older email links still open the reset form, but never grant invitation
+    // verification; only the server's signed PKCE proof can authorize that.
+    if(p.get('type')==='recovery')storeRecovery({userId:user.id,sessionId:sessionId(),at:Date.now(),invitation:false,passwordSaved:false});
     return { type: p.get('type') || 'signup' };
   },
   async signOut() {
     authEpoch++;
     const token = session()?.access_token;
     save(null);
-    try { sessionStorage.removeItem(PKCE); } catch {}
+    recoveryMemory=null;
+    callbackInvite='';clearEmailPending();
+    try { sessionStorage.removeItem(PKCE);sessionStorage.removeItem(RECOVERY); } catch {}
     if (token) { try { await raw('/auth/v1/logout', { method: 'POST', token }); } catch { return {remoteRevoked:false}; } }
     return {remoteRevoked:true};
   },
