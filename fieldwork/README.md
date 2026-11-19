@@ -7,14 +7,16 @@ currency **minor units** are retained (KES 100 = KSh 1).
 This is release preparation. **The three original database upgrades were applied to the
 current Fieldnote project on 18 November 2026 at approximately 21:36 UTC, after
 approval and successful rollback rehearsals. Original farm data was preserved;
-live email/Google/MFA and other account HTTP flows still need verification.** Read
+live email/MFA and the remaining account HTTP flows still need verification.** Read
 [Ian's handoff](docs/USABILITY-HANDOFF.md) for release checks and the
 [feature inventory](docs/FEATURE-INVENTORY.md) for preservation mapping.
 The fourth, Google-only owner-approval upgrade is also **applied**, after separate
 qualification and approval. Its completion was observed at 23:49:35 UTC on 18 November.
 Google is enabled in the provider settings. Email/password signup confirmation is
 temporarily disabled at the owner's request; this is not mailbox-ownership proof.
-Manual Google linking is enabled. Real OAuth sign-in/linking remain unverified.
+Manual Google linking is enabled. Initial and returning Google sign-in callbacks,
+new workspace/farm onboarding, profile preference save/reload, own-account export
+and sign-out passed in production. Linking to another sign-in method is unverified.
 The Google-first signup, hidden Forgot shortcut and Account ID/approval interface
 are included in this release; production deployment is confirmed separately.
 
@@ -94,18 +96,22 @@ or fixtures. The approved installation then passed fresh 34-table data/catalog
 checks before its single commit and verified the stored function/security contract
 afterward. Bundle SHA256:
 `ef75a5ffc3ae15a2f081ad94778bf00025e45f61fba1794b77f31d1be846b57f`.
-No CLI migration-history entry was created. Real OAuth and browser/REST flows remain
-unverified. This release temporarily hides the public Forgot password shortcut at the
+No CLI migration-history entry was created. The live account checks above passed;
+email, TOTP, cross-device revocation, real member approval and permanent deletion
+remain unverified. This release temporarily hides the public Forgot password shortcut at the
 owner's request; reset code, APIs and callbacks are retained. Production deployment
 is confirmed separately.
 
 Use Vercel root `fieldwork/`, framework Other and no build command. Configure server
 `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Optional `SUPABASE_SERVICE_ROLE_KEY`
+(`SERVICE_ROLE_KEY` is also accepted; the canonical name takes precedence)
 enables guarded deletion **server-side only**; never put it in browser code, public
 configuration or source. Google provider enablement was verified after owner-entered
-credentials; live callbacks/linking and mail delivery still need testing. Any remaining
+credentials; initial and returning callbacks passed, while linking and mail delivery
+still need testing. The owner saved the server credential directly as a Production
+Secret; this does not prove the privileged deletion request works. Any remaining
 provider configuration belongs directly in the provider consoles. Actual deployed
-environment values and live account flows still need verification; checking variable
+environment values and the remaining live account flows still need verification; checking variable
 names alone does not verify wiring. Ordinary static hosting does not serve `/api/config`
 or `/api/account`.
 
@@ -128,7 +134,7 @@ node --experimental-vm-modules --test tests/*.test.mjs db/tests/*.test.mjs
 node tools/preview.mjs
 ```
 
-The combined automated suite passes **261 tests**. Separately, **17 private installer
+The combined automated suite passes **267 tests**. Separately, **17 private installer
 compiler/artifact tests pass**; these are not live OAuth tests. The new owner-approval
 PostgreSQL rollback suite, TEMP catalog probe and approved installation checks passed.
 Static checks resolve 22 browser modules, two APIs, 12 business routes, five pages,
@@ -145,7 +151,7 @@ Budget Close, Copy feedback, Report and transaction Add/search worked; cancellin
 Filters preserved later budget discard protection. Budgets had no overflow at all
 four widths in both themes. Browser PDF/XLSX and chart PNG/CSV downloads
 worked; PDF parse/render and openpyxl checks passed. Desktop Excel/PDF-reader,
-live Auth, physical devices, screen readers and production wiring remain
+remaining Auth flows, physical devices, screen readers and privileged deletion wiring remain
 unverified. SQL rehearsal coverage is distinct from real Auth and browser/REST
 end-to-end checks. See the handoff before release.
 
@@ -155,8 +161,8 @@ confirmation, Close and sticky-footer controls were checked. In the invented
 sample, adding a scoped Viewer changed members from six to seven, unchecked
 identity confirmation blocked submission, and role/farm display was correct.
 Account ID Copy showed success feedback; its actual clipboard payload, physical
-touch and screen-reader behavior remain unverified. Real OAuth/TOTP/deletion
-remain pending.
+touch and screen-reader behavior remain unverified. Google sign-in passed in the
+separate live account checks above; TOTP and permanent deletion remain pending.
 
 ## Money, sample records and theme
 
