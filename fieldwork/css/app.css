@@ -116,7 +116,7 @@ td.acts { white-space: nowrap; text-align: right; }
 .check.done span { text-decoration: line-through; color: var(--text-muted); }
 .field textarea { padding: var(--sp-3); min-height: 80px; background: var(--surface); color: var(--text); border: 1px solid var(--border-strong); border-radius: var(--r-sm); font: inherit; }
 dialog form { max-height: 80dvh; overflow: auto; }
-dialog form .field input, dialog form .field select, dialog form .field textarea { width: 100%; min-width: 0; }
+dialog form .field input:not([type=checkbox]):not([type=radio]), dialog form .field select, dialog form .field textarea { width: 100%; min-width: 0; }
 @media (max-width: 640px) {
   .btn.sm, .tab, .subtabs button, .farmtabs button { min-height: var(--tap); }
   .farm .row { flex-wrap: wrap; }

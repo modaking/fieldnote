@@ -8,7 +8,7 @@ async function harness({fresh=true,google=false,section='security',identities=[{
   const tree=sectionDOM(),proto=tree.Element.prototype,calls=[],messages=[],dialog=new tree.Element('dialog');dialog.root=true;
   const matches=(node,selector)=>{const tag=/^[a-z]+/.exec(selector)?.[0],id=/#([\w-]+)/.exec(selector)?.[1],cls=/\.([\w-]+)/.exec(selector)?.[1];if(tag&&node.tag!==tag||id&&node.id!==id||cls&&!(node.attrs.class||'').split(/\s+/).includes(cls))return false;return[...selector.matchAll(/\[([\w-]+)(?:=["']?([^\]"']+)["']?)?\]/g)].every(([,key,value])=>key in node.attrs&&(value==null||node.attrs[key]===value));};
   proto.querySelectorAll=function(selector){const found=[];for(const child of this.children){if(selector.split(',').some(s=>matches(child,s.trim())))found.push(child);found.push(...child.querySelectorAll(selector));}return found;};
-  Object.defineProperties(proto,{name:{get(){return this.attrs.name;}},type:{get(){return this.attrs.type;},set(value){this.attrs.type=value;}},elements:{get(){return Object.fromEntries(this.querySelectorAll('[name]').map(node=>[node.name,node]));}},classList:{get(){return{add:()=>{},remove:()=>{}};}}});
+  Object.defineProperties(proto,{name:{get(){return this.attrs.name;}},type:{get(){return this.attrs.type;},set(value){this.attrs.type=value;}},elements:{get(){return Object.fromEntries(this.querySelectorAll('[name]').map(node=>[node.name,node]));}},classList:{get(){const node=this,change=(name,enabled)=>{const names=new Set((node.attrs.class||'').split(/\s+/).filter(Boolean));enabled?names.add(name):names.delete(name);node.attrs.class=[...names].join(' ');return enabled;};return{add:name=>change(name,true),remove:name=>change(name,false),toggle:(name,enabled)=>change(name,enabled??!(node.attrs.class||'').split(/\s+/).includes(name))};}}});
   proto.showModal=function(){this.open=true;};proto.close=function(){this.open=false;for(const listener of this.listeners.get('close')||[])listener();};proto.insertAdjacentHTML=()=>{};
   const user={id:'fixture-user',email:'fixture@example.invalid',email_confirmed_at:'2026-11-18T00:00:00Z',identities,factors},current={user,access_token:'not-a-real-token'};
   const context=vm.createContext({console,Intl,Date,URLSearchParams,location:{hash:`#/account?section=${section}`,pathname:'/',search:''},history:{replaceState(){}},window:{},document:{createElement:tag=>new tree.Element(tag),body:tree.el},FormData:class{constructor(form){this.form=form;}*[Symbol.iterator](){for(const node of this.form.querySelectorAll('[name]'))if(!node.disabled)yield[node.name,node.value];}}});
@@ -56,6 +56,40 @@ test('sign-in provider discovery hides disabled Google and a failed check offers
   let attempt=0;h.auth.capabilities=async()=>{if(++attempt===1)throw new Error('Offline');return{google:false};};
   authUI.namespace.renderAuth(h.el,{auth:h.auth,onSignedIn:async()=>{},brand:()=>''});await new Promise(resolve=>setImmediate(resolve));assert.equal(h.el.querySelector('#auth-google-option').hidden,true);await h.el.querySelector('#provider-retry').click();assert.equal(attempt,2);assert.equal(h.el.querySelector('#auth-google-option').hidden,true);assert.equal(h.el.querySelector('#google').disabled,true);
   h.auth.capabilities=async()=>({google:true});authUI.namespace.renderAuth(h.el,{auth:h.auth,onSignedIn:async()=>{},brand:()=>''});await new Promise(resolve=>setImmediate(resolve));assert.equal(h.el.querySelector('#auth-google-option').hidden,false);assert.equal(h.el.querySelector('#google').disabled,false);
+});
+
+const visiblePrimaryButtons=el=>el.querySelectorAll('button').filter(node=>{
+  const classes=(node.attrs.class||'').split(/\s+/);if(!classes.includes('ui-button')||classes.some(name=>['secondary','ghost','danger'].includes(name)))return false;
+  for(let parent=node.parentElement;parent;parent=parent.parentElement)if(parent.hidden||parent.tag==='details'&&!parent.open)return false;return true;
+});
+
+test('signup makes verified Google primary while preserving the same opened email form and typed values',async()=>{
+  const h=await harness();let finish;h.auth.capabilities=()=>new Promise(resolve=>finish=resolve);
+  h.authUI.renderAuth(h.el,{auth:h.auth,onSignedIn:async()=>{},brand:()=>''},'up');const form=h.el.querySelector('#auth'),disclosure=h.el.querySelector('#email-signup'),name=form.querySelector('[name="name"]'),email=form.querySelector('[name="email"]'),password=form.querySelector('[name="password"]');
+  assert.equal(h.el.querySelector('#auth-google-option').hidden,true);assert.match(h.el.innerHTML,/Checking sign-up options/);
+  disclosure.open=true;name.value='Farmer';email.value='farmer@example.invalid';password.value='Entered-password!';finish({google:true});await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.el.querySelector('#auth'),form);assert.equal(form.querySelector('[name="email"]'),email);assert.equal(name.value,'Farmer');assert.equal(email.value,'farmer@example.invalid');assert.equal(password.value,'Entered-password!');assert.equal(disclosure.open,true);
+  assert.equal(disclosure.contains(form),true);assert.deepEqual(visiblePrimaryButtons(h.el).map(node=>node.id),['google']);assert.match(form.querySelector('#auth-submit').attrs.class,/secondary/);
+  const parent=disclosure.parentElement;assert.ok(parent.children.indexOf(h.el.querySelector('#auth-google-option'))<parent.children.indexOf(disclosure));assert.match(h.el.innerHTML,/Email sign-up may require a confirmation link/);
+  disclosure.open=false;h.auth.google=async()=>{throw new Error('Google could not be opened');};await h.el.querySelector('#google').click();assert.match(h.el.querySelector('#auth-provider-message').innerHTML,/Google could not be opened/);assert.equal(disclosure.open,false,'Google feedback remains visible outside the closed email form');
+});
+
+test('disabled or unavailable Google opens an email primary fallback and retry never rebuilds its draft',async()=>{
+  for(const unavailable of [false,true]){
+    const h=await harness();let attempts=0;h.auth.capabilities=async()=>{if(++attempts===1){if(unavailable)throw new Error('Offline');return{google:false};}return{google:true};};
+    h.authUI.renderAuth(h.el,{auth:h.auth,onSignedIn:async()=>{},brand:()=>''},'up');await new Promise(resolve=>setImmediate(resolve));const form=h.el.querySelector('#auth'),email=form.querySelector('[name="email"]'),disclosure=h.el.querySelector('#email-signup');
+    assert.equal(disclosure.open,true);assert.equal(h.el.querySelector('#auth-google-option').hidden,true);assert.deepEqual(visiblePrimaryButtons(h.el).map(node=>node.id),['auth-submit']);email.value='saved@example.invalid';
+    if(unavailable){await h.el.querySelector('#provider-retry').click();assert.equal(h.el.querySelector('#auth'),form);assert.equal(form.querySelector('[name="email"]'),email);assert.equal(email.value,'saved@example.invalid');assert.equal(disclosure.open,true);assert.deepEqual(visiblePrimaryButtons(h.el).map(node=>node.id),['google']);}
+  }
+});
+
+test('disclosed email signup still follows the actual session response with either confirmation setting',async()=>{
+  for(const signedIn of [false,true]){
+    const h=await harness({google:true});let loaded=0,request;h.auth.signUp=async(...args)=>{request=args;return{signedIn};};
+    h.authUI.renderAuth(h.el,{auth:h.auth,onSignedIn:async()=>loaded++,brand:()=>''},'up');await new Promise(resolve=>setImmediate(resolve));h.el.querySelector('#email-signup').open=true;
+    input(h.el,'name',' Farmer ');input(h.el,'email','farmer@example.invalid');input(h.el,'password','Entered-password!');await h.el.querySelector('#auth').onsubmit({preventDefault(){}});
+    assert.deepEqual(request,['farmer@example.invalid','Entered-password!','Farmer']);assert.equal(loaded,signedIn?1:0);if(!signedIn)assert.match(h.el.innerHTML,/Verify your email/);
+  }
 });
 
 test('incoming invitations stay unread until server attestation and a fresh mailbox proof are both present',async()=>{

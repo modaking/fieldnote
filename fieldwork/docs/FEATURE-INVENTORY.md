@@ -1,17 +1,26 @@
 # Feature preservation checklist
 
 Inventory taken before simplification and updated 18 November 2026 against the
-expanded working draft. **No feature was merged or retired.** All 16 sections and
+release changes. **No feature was merged or retired.** All 16 sections and
 14 business view functions remain, with Members/Invitations served by the checked
 team interface. "Draft" records implementation history, not live-provider
-verification. All three SQL migrations were applied to the current Fieldnote project on
-18 November 2026 at approximately 21:36 UTC. All three SQL
+verification. The three original SQL migrations were applied to the current Fieldnote project on
+18 November 2026 at approximately 21:36 UTC. Those three SQL
 role/two-workspace/farm-scope suites passed on the current project inside a
 reviewed rollback-only transaction; no schema, RLS or fixture rows were retained.
 The latest recovery-extended run passed on its first attempt, including the
 complete finance aggregate/server-close and invitation/session checks.
 The final approved atomic install also passed immediate original-column and
 Auth/Storage preservation checks. Provider/account HTTP verification is pending.
+The fourth Google-only owner-approval migration is **applied**. Its PostgreSQL
+rollback suite and separate TEMP catalog/EOL probe passed on the current project;
+they retained no proposed function or fixtures. A separately approved atomic
+installation then passed fresh data/catalog and post-commit contract checks.
+Google provider and manual-linking enablement are verified; real OAuth sign-in/
+linking remain untested.
+Email/password signup confirmation is temporarily disabled by the owner's request;
+the new Google-first signup, hidden Forgot shortcut and Account ID/approval UI
+are included in this release; production deployment is confirmed separately.
 
 ## Navigation before → after
 
@@ -49,17 +58,17 @@ Ctrl/Cmd+K provide shortcuts without adding more sidebar destinations.
 
 ## Existing modules, forms and settings
 
-Every row remains a preservation requirement. Locations describe the working
-branch; an entry is not a claim that every flow passed live verification.
+Every row remains a preservation requirement. Locations describe this release;
+an entry is not a claim that every flow passed live verification.
 The Before column describes the pre-upgrade baseline; current database status is
 recorded in the dashboard/account and verification sections below.
 
 | ID | Feature and controls to preserve | Before | Target location |
 | --- | --- | --- | --- |
-| A01 | Password sign-in, signup, name/email/password validation | Sign-in | Sign-in |
+| A01 | Password sign-in, signup, name/email/password validation | Sign-in | Sign-in; email/password signup confirmation temporarily disabled by owner request, not mailbox proof |
 | A02 | Show/hide password, clear errors, busy/disabled states | Draft sign-in | Sign-in |
 | A03 | Verification/resend, cross-tab email PKCE, Google tab-scoped PKCE callback | Draft sign-in | Sign-in / Account security |
-| A04 | Forgot password, reset/confirmation, expired callback handling | Sign-in | Sign-in / reset |
+| A04 | Forgot password, reset/confirmation, expired callback handling | Sign-in | Public Forgot shortcut temporarily hidden in this release by owner request; reset forms, APIs, callbacks and invitation-proof requirements retained |
 | A05 | Shared refresh/retry, revoked-session sign-out, blocked-storage fallback | Auth client | Auth client + connection feedback |
 | A06 | Workspace creation, currency selection, automatic owner | First use | First-use setup / workspace menu |
 | A07 | First farm and optional team invitation step | Draft first use | First-use setup |
@@ -100,6 +109,7 @@ recorded in the dashboard/account and verification sections below.
 | P05 | Members search/filter/sort/pagination; roles, farm scopes, join dates | Draft Members | People → Members |
 | P06 | Invite, change role/scope, remove; owner/admin rules and last-owner guard | Draft before SQL upgrade | Member drawer / row More menu |
 | P07 | Invitation list, expiry/status, revoke, copy link (no automatic email send) | Draft Members/Invitations | People → Invitations |
+| P08 | Owner approval of an exact Google-only Account ID, identity confirmation, four lower roles and all/selected farms | SQL applied/qualified; interface included in release and sample approval passed; live OAuth pending | Account → Profile → Account ID / Copy; People → Members → More → Add Google account |
 | R01 | Overview performance statement | Draft Reports | Reports → Overview; Overview More |
 | R02 | Task completion/overdue/checklist statement | Draft Reports | Reports → Operations; Tasks/Checklists More |
 | R03 | Income/expense, cash movement/snapshots, targets/budgets, ledger | Draft Reports | Reports → Finances; Finances More |
@@ -139,7 +149,7 @@ These remain in the checklist even when hidden behind progressive disclosure.
 | D07 | Tooltip/tap/keyboard, legend toggles, drill filters, table view, PNG/CSV | Implemented; sample PNG rendered and CSV downloaded | Chart data-table toggle / More actions |
 | C01 | Name/photo/contact phone, formatting language/timezone | Schema/private bucket applied; real photo flow unverified | Account → Profile |
 | C02 | Theme/default farm/default period | Database defaults applied; live account verification pending | Account → Profile → More options → Display options |
-| C03 | Reauthenticated password/email changes, verification, connected methods | Implemented; live email/Google flows unverified | Account → Security |
+| C03 | Reauthenticated password/email changes, verification, connected methods | Implemented; Google provider/manual linking enabled, live email/OAuth/linking flows unverified | Account → Security |
 | C04 | Own session inventory, sign out other devices | SQL active-session/context guards applied and fixture-tested; real revocation unverified | Account → Security |
 | C05 | Optional TOTP enroll/challenge/verify/remove; enforce aal2 after opt-in | SQL guards applied and fixture-tested; real TOTP flows unverified | Account → Security |
 | C06 | Alert/channel choices and in-app alerts; honest email-channel capability | Preferences/dashboard RPCs applied; no email delivery claim | Account → More → Notifications |
@@ -147,10 +157,13 @@ These remain in the checklist even when hidden behind progressive disclosure.
 | C08 | Own-data JSON export, guarded account deletion, business-record retention | SQL applied; server credential and live checks still required | Account → More → Data & privacy |
 | C09 | Email-bound pending personal invites, accept/decline | Recovery/password-audit and fresh-proof gates applied and fixture-tested; real email flow unverified | Account → More → Invitations |
 | C10 | Unverified email, wrong method, expired/reused links, removed membership, expiry mid-action | Guards implemented; live edge flows unverified | Contextual feedback / sign-in |
+| C11 | Own Account ID and Copy, without lookup of another person's email | Included in release; sample Copy feedback passed, actual clipboard payload and live Google flow unverified | Account → Profile |
 
 ## Verification status
 
-- Latest full run: **250 JavaScript tests pass**.
+- The combined automated run passes **261 tests**. Separately, **17 private installer
+  compiler/artifact tests pass**. The new owner-approval PostgreSQL rollback suite
+  and TEMP catalog/EOL probe passed; the approved forward installation passed and committed.
   Static checks pass: 22 browser modules, two APIs, 12 business routes, five pages,
   16 sections and 12 assets. All 32 configured contrast pairs pass per theme.
   JavaScript checks are separate from the SQL rehearsal results below.
@@ -160,6 +173,13 @@ These remain in the checklist even when hidden behind progressive disclosure.
   widths in both themes. Final Overview HTML control touch-size and Profile/Search
   dirty-form browser rechecks passed. Broader form and physical-device QA remains
   separate from source-level preservation of the checklist.
+- Final release captures passed independent visual review at all four widths in
+  both themes, plus four 360×640 short-phone captures covering Save, identity
+  confirmation, Close and sticky footers. A sample scoped Viewer approval changed
+  members from six to seven; unchecked identity confirmation blocked submission
+  and role/farm display was correct. Account ID Copy showed success feedback;
+  the actual clipboard payload, physical touch and screen-reader behavior remain
+  unverified. All records in these browser checks were invented sample data.
 - The 360 px dark task drawer's sticky save, inline validation and discard prompt
   were inspected; sample task completion updated immediately with a success toast.
   Final sample checks passed Budget Close/saved feedback, Copy's missing-budget
@@ -180,7 +200,7 @@ These remain in the checklist even when hidden behind progressive disclosure.
   or fixture rows; normal logs and audit identity
   sequence gaps can survive rollback, and sequences were not reset. Real Auth/HTTP and
   concurrent-session behavior are separate checks.
-- All three upgrades were then applied through one approved manual SQL transaction
+- The three original upgrades were then applied through one approved manual SQL transaction
   (bundle SHA256 `2c7bdf1673905e51a8e992aab74b8afb1710a52f8b8440083e6c585a6bd31993`).
   Immediate fresh checks preserved all 98 original rows/24 tables and whole-row
   Auth/Storage digests. Fixtures were removed before commit; the installed catalog
@@ -193,9 +213,24 @@ These remain in the checklist even when hidden behind progressive disclosure.
   access requires fresh email magic-link/recovery proof; email changes require
   recovery again. User metadata is never proof. Email callbacks support another
   tab in the same browser and preserve invitation intent; Google stays tab-scoped.
+- Installed Google-only approval requires a fresh primary owner sign-in, active own
+  session and enrolled MFA, with manager/accountant/worker/viewer assignments only.
+  The target must have exactly one Google Auth identity, typed boolean verified
+  email matching its normalized current email, and no password or other identity.
+  Existing memberships and email-bound invite recovery remain unchanged. The
+  [forward migration](../db/tests/README.md) is applied. Its suite passed in the
+  current project's `16596ef9…` rollback batch with 34-table whole-row preservation;
+  the TEMP catalog/EOL probe passed separately. Approved installation bundle
+  `ef75a5ffc3ae15a2f081ad94778bf00025e45f61fba1794b77f31d1be846b57f`
+  passed and committed, with fresh 34-table/catalog checks before commit and
+  stored-function/grants/28-table RLS verification afterward. Completion was
+  observed at 23:49:35 UTC; the exact commit timestamp was not captured. No CLI
+  history entry was created. The interface is included in this release; production
+  deployment is confirmed separately. Real browser authorization remains unverified.
 - Real Auth email/OAuth/TOTP/deletion and actual deployed environment values remain
-  unverified. Owner-provided mail/Google credentials and provider setup are still
-  required. See [USABILITY-HANDOFF.md](USABILITY-HANDOFF.md) for Ian's release checks.
+  unverified. Google provider enablement has been checked after owner-entered
+  credentials; remaining provider choices, callbacks/linking and mail delivery
+  still need verification. See [USABILITY-HANDOFF.md](USABILITY-HANDOFF.md).
 
 ## Limits to preserve honestly
 

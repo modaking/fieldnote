@@ -4,18 +4,65 @@ These SQL suites create fictional users, workspaces, records, sessions and an
 unusable MFA factor. They test writes, deletes, role policies and grants; they are
 **not read-only probes**. No real Auth email or external enrollment call is made.
 
-**All three migrations are applied to the current project. Do not rerun them or
+**All four migrations are applied to the current project. Do not rerun them or
 the original `schema.sql`.** Each standalone `.test.sql` starts a transaction and finishes with
 `ROLLBACK`. Keep the complete suite together; do not execute selected write lines
 or commit its fixtures. Fixture mutations use reserved IDs or the
 fixture workspace, including transaction descriptions that could occur elsewhere.
 
-PostgreSQL `BEGIN` statements do not create nested transactions. Each migration
+PostgreSQL `BEGIN` statements do not create nested transactions. Each original migration
 has its own `BEGIN`/`COMMIT`: wrapping unchanged migration files in another
 transaction does **not** make a rollback rehearsal. A migration's `COMMIT` commits
 the transaction, and a later test-suite `ROLLBACK` does not undo that schema/RLS
 change. Do not concatenate the original files under an outer rollback and assume
 the project is restored.
+
+## Google-only owner approval — qualified and installed
+
+The separately generated forward file
+[`20261118224325_owner_approved_membership.sql`](../migrations/20261118224325_owner_approved_membership.sql)
+adds `fw_add_member_by_id(p_workspace_id,p_user_id,p_role,p_farm_ids)` only. Its
+source SHA256 is `8e4cc17d75f03df971c471db4802ffcb0f39620c3a465e201c25b88080319cf1`.
+It was **applied through a separately approved manual atomic batch**; the local
+CLI-generated filename did not create a remote migration-history entry. Unlike
+the original three files, its body has no transaction-control statements and was
+installed with a reviewed atomic wrapper. Do not rerun it.
+
+[`The new rollback-only suite`](20261118224325_owner_approved_membership.test.sql)
+has source SHA256 `41e691617043d099d964da75f89ed4d4c902346f79d4d5e182b4d816d1f9bf53`
+and **passed on the current PostgreSQL project inside the reviewed rollback batch**.
+It covers owner/fresh-auth/session/
+MFA checks, four lower roles and farm scope, no existing-member changes, audit and
+effective RLS outcomes. Target fixtures cover four Google-only successes and
+rejection of password/mixed accounts, missing/other/multiple identities,
+false/string/missing email-verification flags and mismatched/empty identity email.
+An exact UID or a confirmation checkbox alone does not prove exclusive credential
+control. Existing password owners may approve eligible Google-only targets;
+existing email-invite/recovery checks remain unchanged.
+
+The private rehearsal checked scalar UUID and UUID-array fixture collisions
+across public/Auth/Storage, used one outer transaction and a fixture savepoint,
+and compared fresh whole-row counts/digests across 28 public, four Auth and two
+Storage tables after fixture rollback. Final result tokens included source hashes.
+Batch SHA256 `16596ef914896d5bac30db6e374bdb06cc221c9b2699dbffad1d290119b0bff3`
+passed on its first attempt under one raw fail-fast execution; its final rollback
+retained no function or fixtures. A separate TEMP-only catalog-helper/EOL probe,
+SHA256 `b17a1d7f790377c820ab950fd4e78bcfd2f7a7b4a77ba508addf841a19ab1e40`,
+also passed on its first attempt, with no application/Auth row DML.
+Execution status here supersedes preparation-time artifact comments.
+
+After fresh approval, permanent batch
+`ef75a5ffc3ae15a2f081ad94778bf00025e45f61fba1794b77f31d1be846b57f`
+**passed on its first attempt and committed**. Success was observed at
+**23:49:35 UTC on 18 November 2026**; the exact database commit timestamp was not
+captured. Fixtures and temporary grants were rolled back before fresh whole-row
+checks across all 34 tables and existing catalog/access-rule comparisons. The
+post-commit guard verified the normalized stored body MD5
+`97eb917c764c6215156cf791800d7e55`, signature, owner, grants and 28-table RLS contract.
+Only the checked new RPC was retained. This was manual SQL, with no CLI history
+entry. Do not replay any applied upgrade or concatenate standalone suite wrappers.
+Preparation-time SQL headers/manifests are preserved byte-for-byte; this execution
+record and the private applied journal describe the current status.
 
 ## Completed current-project rehearsal
 
@@ -67,6 +114,7 @@ Applied source SHA256 values:
 - [Members/roles](../migrations/20261118_members_roles.sql): `fdac1a40ec3f7b7962a323d36925b94dfbdf1cc687c6caf7802f94ec04fa9101`
 - [Dashboard/finance](../migrations/20261118_dashboard.sql): `4f9e5068ffa1747efeb2a0955f53a8aed6275d929a905576e276b501981a3d3b`
 - [Account](../migrations/20261118_account.sql): `d7e618192ffeee7835ba999c0b3ad3bd598b18a42f84fc6b742827b17311e2ed`
+- [Google-only approval](../migrations/20261118224325_owner_approved_membership.sql): `8e4cc17d75f03df971c471db4802ffcb0f39620c3a465e201c25b88080319cf1`
 
 This was a manual SQL installation, **not a Supabase CLI migration-history entry**.
 Reconcile that history before future CLI deployment. Use reviewed forward
@@ -86,8 +134,19 @@ concurrent-session behavior. Local simulated permissions and JavaScript checks
 are separate evidence. Never rerun the original `db/schema.sql` over existing
 farm data.
 
-The latest full JavaScript run passed **250 tests**; static checks resolve 22
+The combined automated run passes **261 tests**; **17 private installer compiler/
+artifact tests** pass separately. Static checks resolve 22
 browser modules, two APIs, 12 business routes, five pages, 16 sections and 12 assets.
 These include source-surface contracts and mocked callback tests, not real email
-delivery or Google sign-in. Provider credentials, live callbacks and actual
-deployment values still require owner-assisted verification.
+delivery or Google sign-in. Google provider enablement has been verified; actual
+OAuth callbacks/linking, mail delivery and deployed environment wiring still need
+owner-assisted verification.
+Email/password signup confirmation was temporarily disabled at the owner's
+request through provider settings, not by these SQL files. Incoming email-invite
+proof rules remain unchanged. Manual Google linking is now enabled, but its real
+OAuth flow remains unverified. Google-first signup, the hidden Forgot shortcut and
+Account ID/approval UI are included in this release; production deployment is
+confirmed separately. Sample browser layout/approval checks passed at four widths
+in both themes and in 360×640 captures; see the [handoff](../../docs/USABILITY-HANDOFF.md).
+They do not verify real OAuth/TOTP/deletion, physical touch, screen readers or the
+actual clipboard payload.
