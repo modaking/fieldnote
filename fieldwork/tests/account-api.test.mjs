@@ -6,8 +6,8 @@ const uid='ab000000-0000-4000-8000-000000000001',now=1800000000000;
 const env={SUPABASE_URL:'https://db.example.invalid',SUPABASE_ANON_KEY:'public-key',SUPABASE_SERVICE_ROLE_KEY:'server-secret'};
 const token=(changes={})=>['test',Buffer.from(JSON.stringify({sub:uid,role:'authenticated',aud:'authenticated',iss:env.SUPABASE_URL+'/auth/v1',exp:now/1000+3600,aal:'aal1',amr:[{method:'password',timestamp:now/1000}],...changes})).toString('base64url'),'verified-by-upstream'].join('.');
 const reply=(data,status=200)=>new Response(status===204?null:JSON.stringify(data),{status});
-async function run({method='DELETE',body={confirmation:'DELETE MY ACCOUNT',email:'me@example.invalid'},claims={},user={},status={},key=true,route,headers={}}={}){
-  const calls=[];const handler=createHandler({env:{...env,...(!key?{SUPABASE_SERVICE_ROLE_KEY:''}:{})},now:()=>now,fetch:async(url,options)=>{
+async function run({method='DELETE',body={confirmation:'DELETE MY ACCOUNT',email:'me@example.invalid'},claims={},user={},status={},key=true,environment={},route,headers={}}={}){
+  const calls=[];const handler=createHandler({env:{...env,...(!key?{SUPABASE_SERVICE_ROLE_KEY:''}:{}),...environment},now:()=>now,fetch:async(url,options)=>{
     const c={url,method:options.method,headers:options.headers,body:options.body?JSON.parse(options.body):undefined};calls.push(c);
     const custom=route?.(c);if(custom)return custom;
     if(url.endsWith('/auth/v1/user'))return reply(c.method==='PUT'?{id:uid,email:'me@example.invalid',...c.body}:{id:uid,email:'me@example.invalid',email_confirmed_at:'2026-01-01',factors:[],...user});
@@ -60,6 +60,23 @@ test('successful deletion uses only verified user ID and keeps service key on se
   for(const c of r.calls.slice(0,2))assert.equal(c.headers.apikey,'public-key');
   for(const c of r.calls.slice(2))assert.equal(c.headers.Authorization,'Bearer server-secret');
   assert.equal(r.headers['Cache-Control'],'no-store');
+});
+
+test('server-only SERVICE_ROLE_KEY alias enables availability and privileged deletion without exposing it',async()=>{
+  const environment={SUPABASE_SERVICE_ROLE_KEY:undefined,SERVICE_ROLE_KEY:' alias-server-secret '};
+  const available=await run({method:'GET',environment});assert.equal(available.statusCode,200);assert.deepEqual(available.body,{delete_available:true,message:''});
+  assert.equal(available.calls.length,1);assert.equal(available.calls[0].headers.apikey,'public-key');assert.ok(!JSON.stringify(available.body).includes('alias-server-secret'));
+  const deleted=await run({environment,status:{avatar_paths:[uid+'/avatar.webp']}});assert.equal(deleted.statusCode,204);assert.equal(deleted.calls.length,4);
+  for(const call of deleted.calls.slice(0,2)){assert.equal(call.headers.apikey,'public-key');assert.ok(!call.headers.Authorization.includes('alias-server-secret'));}
+  for(const call of deleted.calls.slice(2)){assert.equal(call.headers.apikey,'alias-server-secret');assert.equal(call.headers.Authorization,'Bearer alias-server-secret');}
+  assert.equal(deleted.calls.at(-1).url,env.SUPABASE_URL+'/auth/v1/admin/users/'+uid);assert.ok(!JSON.stringify(deleted.body).includes('alias-server-secret'));
+  const blankCanonical=await run({method:'GET',environment:{...environment,SUPABASE_SERVICE_ROLE_KEY:' '}});assert.equal(blankCanonical.body.delete_available,true);
+});
+
+test('canonical service credential takes precedence over its server alias',async()=>{
+  const result=await run({environment:{SUPABASE_SERVICE_ROLE_KEY:' canonical-server-secret ',SERVICE_ROLE_KEY:'alias-server-secret'}});
+  assert.equal(result.statusCode,204);const admin=result.calls.at(-1);assert.equal(admin.headers.apikey,'canonical-server-secret');assert.equal(admin.headers.Authorization,'Bearer canonical-server-secret');
+  assert.ok(!result.calls.some(call=>call.headers.Authorization.includes('alias-server-secret')));
 });
 test('avatar cleanup refuses paths for another user and prevents deletion after failed cleanup',async()=>{
   const escaped=await run({status:{avatar_paths:['someone-else/avatar.webp']}});assert.equal(escaped.statusCode,409);assert.equal(escaped.calls.length,2);

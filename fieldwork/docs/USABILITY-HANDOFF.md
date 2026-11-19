@@ -204,7 +204,7 @@ node --experimental-vm-modules --test tests/*.test.mjs db/tests/*.test.mjs
 node tools/preview.mjs
 ```
 
-The combined automated run passes **261 tests**. Separately, **17 private installer
+The combined automated run passes **267 tests**. Separately, **17 private installer
 compiler/artifact tests pass**. Static checks pass for **22 browser
 modules, two API handlers, 12 business routes, five pages, 16 sections and 12
 assets**. These JavaScript checks are separate from the rollback-only SQL results
@@ -255,20 +255,43 @@ installation. Original-column and Auth/Storage preservation passed after commit.
 Detailed project configuration checks are retained privately outside this public
 handoff.
 
+## Live account checks
+
+Production initial Google signup/callback and returning Google sign-in passed.
+A separate clearly named test workspace and farm completed onboarding without
+sending invitations or editing original farms; those test records are retained.
+The Google profile/account ID and current session loaded. A display preference
+saved, survived reload, and was restored to its original value. Own-account JSON
+downloaded and parsed with one own membership and no password/token/secret fields.
+Removing the only Google identity was disabled; owner Leave returned the required
+transfer message and account deletion was blocked while owning the test workspace.
+Sign-out gave feedback; returning sign-in restored Overview. Refresh verifies
+session restoration, not actual token refresh/expiry or cross-device revocation.
+
+The owner saved the existing server credential directly in Vercel as a
+Production-only Secret named `SERVICE_ROLE_KEY`. The server accepts that alias,
+preferring `SUPABASE_SERVICE_ROLE_KEY` if both are set. No secret was read or
+published. Presence/name/scope do not establish successful privileged deletion.
+
+For empty dashboards, zero-task and zero-cash summaries retain their actual rows
+for table/CSV; zero totals do not claim that no transactions exist. These changes
+do not change database figures, permissions or report data.
+
 ## Ian's remaining release checks
 
 1. Do not rerun the applied bundle. Verify direct REST/browser flows for six roles,
    two workspaces and restricted farms against the installed upgrades.
    Reconcile dashboard/report figures, source posting, budgets and saved cash.
 2. Google provider and manual-linking enablement are verified after owner-entered
-   credentials; this does not establish successful sign-in. Verify redirects and
+   credentials; initial and returning sign-in callbacks also passed. Verify
    mail delivery within the chosen sender's limits,
    and make completed Auth audit events available. Then verify real
-   email/verification/recovery/magic links, Google redirects/linking/
+   email/verification/recovery/magic links, Google linking/
    removal, TOTP enrollment/challenge/removal, session revocation, invitation
-   acceptance and guarded deletion. No live mail/Google flow has been verified.
+   acceptance and guarded deletion. Live mail delivery remains unverified.
 3. Verify Vercel project root `fieldwork/` and server environment
    `SUPABASE_URL` / `SUPABASE_ANON_KEY`. Optional `SUPABASE_SERVICE_ROLE_KEY`
+   (or server alias `SERVICE_ROLE_KEY`; the canonical name takes precedence)
    is server-only for deletion; never expose it in `/api/config` or browser code.
    Verify the actual deployed values privately; environment names alone do not
    verify wiring. The key-backed deletion path remains unverified.
@@ -278,11 +301,11 @@ handoff.
 5. Open exports in desktop Excel and a PDF reader. Native-reader opening remains
    unverified despite parser/render checks. Check long/wide statements and non-Latin
    text.
-6. Confirm production deployment separately and verify the complete Google-only
+6. Verify the final production deployment and complete Google-only
    joining workflow against the installed fourth upgrade. These interface changes
    are included in this release. All four database
-   upgrades are applied; do not replay their SQL. Live provider/HTTP checks still
-   prevent a production-readiness claim.
+   upgrades are applied; do not replay their SQL. The unverified live flows above
+   still prevent a complete production-readiness claim.
 
 Install metadata remains, but there is **no service worker or offline write queue**.
 Offline changes are not queued/synced. Stored map/receipt-path columns do not imply

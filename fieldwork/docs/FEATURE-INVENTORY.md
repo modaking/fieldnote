@@ -148,20 +148,20 @@ These remain in the checklist even when hidden behind progressive disclosure.
 | D06 | Grouped bars/line overlay, line/area, donut, horizontal bars, progress, sparkline, heatmap | Shared renderer implemented | Reused by Overview |
 | D07 | Tooltip/tap/keyboard, legend toggles, drill filters, table view, PNG/CSV | Implemented; sample PNG rendered and CSV downloaded | Chart data-table toggle / More actions |
 | C01 | Name/photo/contact phone, formatting language/timezone | Schema/private bucket applied; real photo flow unverified | Account → Profile |
-| C02 | Theme/default farm/default period | Database defaults applied; live account verification pending | Account → Profile → More options → Display options |
-| C03 | Reauthenticated password/email changes, verification, connected methods | Implemented; Google provider/manual linking enabled, live email/OAuth/linking flows unverified | Account → Security |
-| C04 | Own session inventory, sign out other devices | SQL active-session/context guards applied and fixture-tested; real revocation unverified | Account → Security |
+| C02 | Theme/default farm/default period | Live theme save/reload/restore passed; default farm/period not live-tested | Account → Profile → More options → Display options |
+| C03 | Reauthenticated password/email changes, verification, connected methods | Live initial/returning Google sign-in and only-method removal guard passed; email/linking unverified | Account → Security |
+| C04 | Own session inventory, sign out other devices | Live current-session display, sign-out and session restoration passed; real revocation/refresh unverified | Account → Security |
 | C05 | Optional TOTP enroll/challenge/verify/remove; enforce aal2 after opt-in | SQL guards applied and fixture-tested; real TOTP flows unverified | Account → Security |
 | C06 | Alert/channel choices and in-app alerts; honest email-channel capability | Preferences/dashboard RPCs applied; no email delivery claim | Account → More → Notifications |
-| C07 | Workspace list/role/switch/create/leave; transfer before owner departure | Checked RPCs applied; live account verification pending | Account → Workspaces |
-| C08 | Own-data JSON export, guarded account deletion, business-record retention | SQL applied; server credential and live checks still required | Account → More → Data & privacy |
+| C07 | Workspace list/role/switch/create/leave; transfer before owner departure | Live creation, owner role/list and leave guard passed; switching/transfer unverified | Account → Workspaces |
+| C08 | Own-data JSON export, guarded account deletion, business-record retention | Live own JSON export/owner deletion guard passed; server Secret saved, permanent deletion unverified | Account → More → Data & privacy |
 | C09 | Email-bound pending personal invites, accept/decline | Recovery/password-audit and fresh-proof gates applied and fixture-tested; real email flow unverified | Account → More → Invitations |
 | C10 | Unverified email, wrong method, expired/reused links, removed membership, expiry mid-action | Guards implemented; live edge flows unverified | Contextual feedback / sign-in |
-| C11 | Own Account ID and Copy, without lookup of another person's email | Included in release; sample Copy feedback passed, actual clipboard payload and live Google flow unverified | Account → Profile |
+| C11 | Own Account ID and Copy, without lookup of another person's email | Live own ID and Google sign-in passed; sample Copy feedback passed, actual clipboard payload unverified | Account → Profile |
 
 ## Verification status
 
-- The combined automated run passes **261 tests**. Separately, **17 private installer
+- The combined automated run passes **267 tests**. Separately, **17 private installer
   compiler/artifact tests pass**. The new owner-approval PostgreSQL rollback suite
   and TEMP catalog/EOL probe passed; the approved forward installation passed and committed.
   Static checks pass: 22 browser modules, two APIs, 12 business routes, five pages,
@@ -179,7 +179,13 @@ These remain in the checklist even when hidden behind progressive disclosure.
   members from six to seven; unchecked identity confirmation blocked submission
   and role/farm display was correct. Account ID Copy showed success feedback;
   the actual clipboard payload, physical touch and screen-reader behavior remain
-  unverified. All records in these browser checks were invented sample data.
+  unverified. All records in these sample browser checks were invented data.
+- Separate live account checks passed initial/returning Google sign-in, workspace
+  and first-farm onboarding, profile theme save/reload/restore, own JSON export,
+  current-session display, sign-out, only-method removal guard and owner leave/
+  deletion guards. The clearly named test workspace/farm are retained; original
+  farms were not edited. Email, TOTP, actual token refresh/revocation, real member
+  approval and permanent deletion remain unverified.
 - The 360 px dark task drawer's sticky save, inline validation and discard prompt
   were inspected; sample task completion updated immediately with a success toast.
   Final sample checks passed Budget Close/saved feedback, Copy's missing-budget

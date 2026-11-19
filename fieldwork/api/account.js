@@ -10,6 +10,7 @@ function createHandler({ fetch: fetcher = globalThis.fetch, env = process.env, n
     if (!['GET','POST','DELETE'].includes(req.method)) { res.setHeader('Allow','GET, POST, DELETE'); return send(405,{message:'Method not allowed.'}); }
     try {
       const url = String(env.SUPABASE_URL || '').replace(/\/+$/,''), anonKey = env.SUPABASE_ANON_KEY;
+      const serviceKey = String(env.SUPABASE_SERVICE_ROLE_KEY || '').trim() || String(env.SERVICE_ROLE_KEY || '').trim();
       if (!/^https:\/\//.test(url) || !anonKey) throw problem(503,'Account services are not configured. Ask the workspace administrator to finish setup.');
       if (req.headers.origin) {
         let origin; try { origin = new URL(req.headers.origin); } catch { throw problem(403,'This account request has an invalid origin.'); }
@@ -18,7 +19,7 @@ function createHandler({ fetch: fetcher = globalThis.fetch, env = process.env, n
       const token = /^Bearer ([^\s]+)$/i.exec(req.headers.authorization || '')?.[1];
       if (!token) throw problem(401,'Sign in to manage your account.');
       async function request(path, { method='GET', body, service=false } = {}) {
-        const key = service ? env.SUPABASE_SERVICE_ROLE_KEY : anonKey;
+        const key = service ? serviceKey : anonKey;
         const controller = new AbortController(), timer = setTimeout(()=>controller.abort(),15000);
         try {
           const response = await fetcher(url+path,{method,signal:controller.signal,headers:{apikey:key,Authorization:'Bearer '+(service?key:token),'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});
@@ -38,7 +39,7 @@ function createHandler({ fetch: fetcher = globalThis.fetch, env = process.env, n
       // management requires a direct session, particularly before service-role
       // deletion; an application's delegated grant is not that authorization.
       if(claims.client_id!=null)throw problem(403,'Open Fieldnote and sign in directly to manage your account.');
-      if(req.method==='GET')return send(200,{delete_available:Boolean(env.SUPABASE_SERVICE_ROLE_KEY),message:env.SUPABASE_SERVICE_ROLE_KEY?'':'Account deletion is unavailable until its server-side service credential is configured. No credential belongs in the browser.'});
+      if(req.method==='GET')return send(200,{delete_available:Boolean(serviceKey),message:serviceKey?'':'Account deletion is unavailable until its server-side service credential is configured. No credential belongs in the browser.'});
       let body=req.body; if(typeof body==='string'){try{body=JSON.parse(body);}catch{throw problem(400,'Submit a valid account request.');}}
       if(!body||typeof body!=='object'||Array.isArray(body)||'user_id' in body||'userId' in body)throw problem(400,'Submit an account request for your own sign-in.');
       const recent=Array.isArray(claims.amr)&&claims.amr.some(item=>PRIMARY_AUTH.has(item.method)&&Number.isFinite(item.timestamp)&&seconds-item.timestamp>=-30&&seconds-item.timestamp<=600);
@@ -69,7 +70,7 @@ function createHandler({ fetch: fetcher = globalThis.fetch, env = process.env, n
         if(result.data?.id!==user.id)throw problem(502,'The account service returned an incomplete security response. Refresh Account to review the change.');
         return send(200,{user:result.data,verification_required:body.action==='change_email'});
       }
-      if(!env.SUPABASE_SERVICE_ROLE_KEY)throw problem(503,'Account deletion is not configured. Your account has not been changed.');
+      if(!serviceKey)throw problem(503,'Account deletion is not configured. Your account has not been changed.');
       if(body.confirmation!=='DELETE MY ACCOUNT'||typeof body.email!=='string'||body.email.toLowerCase().trim()!==String(user.email).toLowerCase())throw problem(400,'Confirm deletion with your current email address and the required confirmation.');
       if(status.data.owned_workspaces?.length)throw problem(409,'Transfer ownership of every workspace before deleting your account.');
       if(Number(status.data.business_files)>0)throw problem(409,'Business files are still owned by this account. Ask an administrator to transfer their ownership before deleting the account.');
