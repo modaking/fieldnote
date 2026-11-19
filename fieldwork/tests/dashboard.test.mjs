@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
-import { dashboardPeriod, dashboardDrillURL } from '../js/dashboard.js';
+import { dashboard, dashboardPeriod, dashboardDrillURL } from '../js/dashboard.js';
 import { sampleDashboard, previewRequest } from '../tools/preview.mjs';
+import { sectionDOM } from './helpers/dom-tree.mjs';
 
 test('dashboard periods use complete rolling months across year and leap boundaries',()=>{
   assert.deepEqual(dashboardPeriod('2026-01','quarter'),{from:'2025-11-01',to_exclusive:'2026-02-01'});
@@ -88,6 +89,58 @@ test('local preview does not carry closing snapshots or fabricate profit in an e
   assert.equal(data.kpis.income.trend,'flat');assert.ok(data.series.recorded_cash.every(row=>row.value===null));
   assert.throws(()=>sampleDashboard('owner',{...args,p_workspace_id:'unknown'}),/unavailable/);
   assert.throws(()=>sampleDashboard('owner',{...args,p_from:'2026-02-30'}),/valid/);
+});
+
+// Exercise the real dashboard and shared chart controller against a DOM boundary;
+// database aggregates are supplied intact, without creating any farm records.
+async function dashboardHost(data,{write=true}={}){
+  const tree=sectionDOM(),proto=tree.Element.prototype,originals=new Map(['document','MutationObserver','FormData','location'].map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+  proto.append=function(...nodes){this.replaceChildren(...this.children,...nodes);};
+  proto.removeEventListener=function(type,fn){this.listeners.set(type,(this.listeners.get(type)||[]).filter(item=>item!==fn));};
+  const closest=proto.closest;proto.closest=function(selector){for(const part of selector.split(',')){const found=closest.call(this,part);if(found)return found;}return null;};
+  Object.defineProperty(proto,'elements',{get(){return Object.fromEntries(this.querySelectorAll('[name]').map(node=>[node.attrs.name,node]));}});
+  const document={createElement:tag=>new tree.Element(tag),activeElement:null};
+  const location={hash:'#/overview'};
+  const FormData=class{constructor(form){this.form=form;}*[Symbol.iterator](){for(const node of this.form.querySelectorAll('[name]'))yield[node.attrs.name,node.tag==='select'?(node.querySelector('option[selected]')||node.querySelector('option'))?.attrs.value||'':node.value];}};
+  for(const[key,value]of Object.entries({document,MutationObserver:tree.MutationObserver,FormData,location}))Object.defineProperty(globalThis,key,{value,writable:true,configurable:true});
+  const X={S:{ws:{id:'workspace-a',currency:'KES'},farms:[{id:'farm-a'}],month:'2026-11',farmId:'all'},uid:()=> 'own-test-user',permissions:{canWriteModule:()=>write},canWrite:()=>write,money:v=>`KSh ${v/100}`,toast(){},report(){},db:{rpc:async()=>data}};
+  let controller;
+  try{controller=await dashboard(tree.el,X);}catch(error){restore();throw error;}
+  function restore(){controller?.destroy();for(const[key,descriptor]of originals)if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];}
+  return{...tree,location,restore};
+}
+function emptyDashboard(){
+  const data=sampleDashboard('owner',{...args,p_from:'2020-01-01',p_to:'2020-02-01'});
+  data.tasks={completed:0,open:0,overdue:0,total:0,pct:null};data.attention=[];return data;
+}
+
+test('zero-task dashboard offers the existing scoped add-task path without an unavailable percentage',async()=>{
+  for(const write of [true,false]){
+    const data=emptyDashboard(),before=structuredClone(data),h=await dashboardHost(data,{write});
+    try{
+      const body=h.el.querySelector('#tasks-body'),chart=body.parentElement.parentElement;assert.match(chart.innerHTML,/No tasks yet/);assert.doesNotMatch(chart.innerHTML,/Unavailable|Complete now/);
+      const add=body.querySelector('[data-chart-empty]');assert.equal(Boolean(add),write);
+      if(add){await add.click();const params=new URLSearchParams(h.location.hash.split('?')[1]);assert.match(h.location.hash,/^#\/daily\?/);assert.equal(params.get('add'),'1');assert.equal(params.get('tab'),'tasks');assert.equal(params.get('from'),data.scope.from);assert.equal(params.get('farm'),'all');}
+      assert.equal(chart.querySelector('[data-chart-csv]').disabled,false);assert.equal(chart.querySelector('[data-chart-table]').disabled,false);
+      await chart.querySelector('[data-chart-table]').click();assert.match(chart.innerHTML,/resource-table ui-table/);assert.match(chart.innerHTML,/Complete now/);assert.match(chart.innerHTML,/>0<\/td>/);
+      assert.deepEqual(data,before,'presentation does not change database counts or null percentage');
+    }finally{h.restore();}
+  }
+});
+
+test('all-zero cash movement uses a truthful empty summary and keeps its zero data table',async()=>{
+  const data=emptyDashboard(),before=structuredClone(data),h=await dashboardHost(data);
+  try{
+    const body=h.el.querySelector('#monthly-body'),chart=body.parentElement.parentElement;assert.match(chart.innerHTML,/No recorded cash movement/);assert.doesNotMatch(chart.innerHTML,/first transaction|no transactions|<svg|0\.01/i);
+    await chart.querySelector('[data-chart-table]').click();assert.match(chart.innerHTML,/resource-table ui-table/);
+    assert.equal(chart.querySelector('[data-chart-csv]').disabled,false);assert.deepEqual(data,before);
+  }finally{h.restore();}
+});
+
+test('equal nonzero income and expenses still display a chart when net is zero',async()=>{
+  const data=emptyDashboard();Object.assign(data.series.monthly.at(-1),{income:10000,expenses:10000,net:0});data.tasks={completed:0,open:1,overdue:0,total:1,pct:0};
+  const h=await dashboardHost(data);
+  try{assert.ok(h.el.querySelector('#monthly-body').querySelector('svg'));assert.doesNotMatch(h.el.querySelector('#monthly-body').parentElement.parentElement.innerHTML,/No recorded cash movement/);assert.ok(h.el.querySelector('#tasks-body').querySelector('svg'));assert.match(h.el.querySelector('#tasks-body').parentElement.parentElement.innerHTML,/Complete now/);}finally{h.restore();}
 });
 
 // Call the real dev handler with memory streams: no server, port or network call.

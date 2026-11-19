@@ -204,7 +204,7 @@ export function renderChartCard(el,input={}) {
   const draw=()=>{
     if(destroyed)return;
     const o=resolved(),selected=visibleSeries(o),values=o.rows.flatMap(row=>selected.map(s=>row[s.key])),hasValues=values.some(numeric);
-    const available=hasValues&&selected.length>0;
+    const available=hasValues&&selected.length>0&&!config.emptyChart;
     const controls=C.button({label:table?'View chart':'View data table',variant:'ghost',size:'sm',attrs:{'data-chart-table':true,'aria-pressed':String(table),'aria-controls':`${o.id}-body`,disabled:config.loading || !o.rows.length}})+
       C.actionMenu({label:`More actions for ${o.title || 'chart'}`,text:'More actions',className:'chart-download',items:[{label:'Download PNG',attrs:{'data-chart-png':true,disabled:!available || table || config.loading}},{label:'Download CSV',attrs:{'data-chart-csv':true,disabled:!o.rows.length || config.loading}}]});
     const legend=o.series.map(s=>C.button({label:s.label,variant:'ghost',size:'sm',icon:`<span class="chart-key" aria-hidden="true" style="--chart-series:${color(s.index)};--chart-dash:${s.index%2?'dashed':'solid'}"></span>`,attrs:{'data-chart-legend':s.key,'aria-pressed':String(!hidden.has(s.key))}})).join('');
@@ -213,7 +213,8 @@ export function renderChartCard(el,input={}) {
     if(config.loading)body=C.skeletonRows({rows:4,columns:3});
     else if(config.error)body=C.notice({title:'Chart couldn’t load',text:config.error,tone:'negative',action:config.onRetry?C.button({label:'Try again',variant:'secondary',attrs:{'data-chart-retry':true}}):''});
     else if(!selected.length)body=C.emptyState({title:'All series hidden',text:'Choose a legend item to display its values.',action:C.button({label:'Show all series',variant:'secondary',attrs:{'data-chart-reset':true}})});
-    else if(!hasValues)body=C.emptyState({title:config.emptyTitle || 'No data for this period',text:config.emptyText || 'Recorded values will appear here. Try another period or add a record.',action:config.emptyAction?C.button({label:config.emptyAction.label,variant:'secondary',attrs:{'data-chart-empty':true}}):''});
+    // A summary can be empty while its supplied observations remain exportable.
+    else if(!hasValues||!table&&config.emptyChart)body=C.emptyState({title:config.emptyTitle || 'No data for this period',text:config.emptyText || 'Recorded values will appear here. Try another period or add a record.',action:config.emptyAction?C.button({label:config.emptyAction.label,variant:'secondary',attrs:{'data-chart-empty':true}}):''});
     else body=table?tableHTML(o):`<div class="chart-canvas">${chartSVG(o)}</div>${categoryKey}`;
     el.innerHTML=`<section class="chart-card" aria-labelledby="${o.id}-title"><header class="chart-card-head"><div><h2 id="${o.id}-title">${esc(o.title || 'Chart')}</h2>${o.description?`<p>${esc(o.description)}</p>`:''}</div><div class="chart-card-actions">${controls}</div></header>${!config.loading&&o.series.length?`<div class="chart-legend" aria-label="Visible chart series">${legend}</div>`:''}<div id="${o.id}-body" class="chart-body" aria-busy="${Boolean(config.loading)}">${body}</div><p class="chart-keyboard-hint">${available&&!table?'Use arrow keys to explore values. View the data table for exact figures.':''}</p><div class="chart-tooltip" data-chart-tooltip hidden role="status"><span data-chart-tooltip-text></span>${C.button({label:'View records',variant:'secondary',size:'sm',attrs:{'data-chart-drill':true,hidden:!config.onDrill}})}</div><div class="chart-status ui-sr-only" aria-live="polite" data-chart-status></div></section>`;
     const points=[...el.querySelectorAll('[data-chart-point]')];if(points[0])points[0].setAttribute('tabindex','0');

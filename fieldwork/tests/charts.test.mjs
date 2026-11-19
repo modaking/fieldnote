@@ -114,3 +114,15 @@ test('empty action, retry and skeleton states expose useful controls without fab
   card.update({loading:true});assert.match(el.innerHTML,/Loading records/);assert.equal(el.querySelector('svg'),null);
   card.update({loading:false,error:'Offline',onRetry(){retries++;}});assert.match(el.innerHTML,/Offline/);await click(el,el.querySelector('[data-chart-retry]'));assert.equal(retries,1);
 });
+
+test('an explicit chart empty state retains exact supplied zero rows for tables and CSV',async()=>{
+  const el=host(),rows=[{month:'Nov',income:0,expenses:0,net:0}];
+  const card=renderChartCard(el,{...sample,rows,emptyChart:true,emptyTitle:'No recorded cash movement',emptyText:'View the data table or choose another period.',format:v=>`KSh ${v/100}`});
+  assert.match(el.innerHTML,/No recorded cash movement/);assert.equal(el.querySelector('svg'),null);
+  assert.equal(el.querySelector('[data-chart-png]').disabled,true);assert.equal(el.querySelector('[data-chart-csv]').disabled,false);
+  assert.equal(el.querySelector('[data-chart-table]').disabled,false);assert.match(card.toCSV(),/"Nov",0,"KSh 0",0,"KSh 0",0,"KSh 0"/);
+  await click(el,el.querySelector('[data-chart-table]'));assert.match(el.innerHTML,/resource-table ui-table/);assert.match(el.innerHTML,/Nov/);assert.match(el.innerHTML,/KSh 0/);
+  await click(el,el.querySelector('[data-chart-table]'));assert.match(el.innerHTML,/No recorded cash movement/);assert.equal(el.querySelector('svg'),null);
+  card.update({rows:sample.rows,emptyChart:false});assert.ok(el.querySelector('svg'));assert.equal(el.querySelector('[data-chart-png]').disabled,false);
+  card.destroy();
+});
