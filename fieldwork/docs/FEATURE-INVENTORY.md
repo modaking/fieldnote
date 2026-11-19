@@ -1,7 +1,7 @@
 # Feature preservation checklist
 
 Inventory taken before simplification and updated 18 November 2026 against the
-expanded working draft. **No feature was merged or retired.** All 16 sections and
+release changes. **No feature was merged or retired.** All 16 sections and
 14 business view functions remain, with Members/Invitations served by the checked
 team interface. "Draft" records implementation history, not live-provider
 verification. The three original SQL migrations were applied to the current Fieldnote project on
@@ -20,7 +20,7 @@ Google provider and manual-linking enablement are verified; real OAuth sign-in/
 linking remain untested.
 Email/password signup confirmation is temporarily disabled by the owner's request;
 the new Google-first signup, hidden Forgot shortcut and Account ID/approval UI
-remain local PR 3 changes awaiting deployment.
+are included in this release; production deployment is confirmed separately.
 
 ## Navigation before → after
 
@@ -58,8 +58,8 @@ Ctrl/Cmd+K provide shortcuts without adding more sidebar destinations.
 
 ## Existing modules, forms and settings
 
-Every row remains a preservation requirement. Locations describe the working
-branch; an entry is not a claim that every flow passed live verification.
+Every row remains a preservation requirement. Locations describe this release;
+an entry is not a claim that every flow passed live verification.
 The Before column describes the pre-upgrade baseline; current database status is
 recorded in the dashboard/account and verification sections below.
 
@@ -68,7 +68,7 @@ recorded in the dashboard/account and verification sections below.
 | A01 | Password sign-in, signup, name/email/password validation | Sign-in | Sign-in; email/password signup confirmation temporarily disabled by owner request, not mailbox proof |
 | A02 | Show/hide password, clear errors, busy/disabled states | Draft sign-in | Sign-in |
 | A03 | Verification/resend, cross-tab email PKCE, Google tab-scoped PKCE callback | Draft sign-in | Sign-in / Account security |
-| A04 | Forgot password, reset/confirmation, expired callback handling | Sign-in | Public Forgot shortcut temporarily hidden in the local draft by owner request; deployment pending; reset forms, APIs, callbacks and invitation-proof requirements retained |
+| A04 | Forgot password, reset/confirmation, expired callback handling | Sign-in | Public Forgot shortcut temporarily hidden in this release by owner request; reset forms, APIs, callbacks and invitation-proof requirements retained |
 | A05 | Shared refresh/retry, revoked-session sign-out, blocked-storage fallback | Auth client | Auth client + connection feedback |
 | A06 | Workspace creation, currency selection, automatic owner | First use | First-use setup / workspace menu |
 | A07 | First farm and optional team invitation step | Draft first use | First-use setup |
@@ -109,7 +109,7 @@ recorded in the dashboard/account and verification sections below.
 | P05 | Members search/filter/sort/pagination; roles, farm scopes, join dates | Draft Members | People → Members |
 | P06 | Invite, change role/scope, remove; owner/admin rules and last-owner guard | Draft before SQL upgrade | Member drawer / row More menu |
 | P07 | Invitation list, expiry/status, revoke, copy link (no automatic email send) | Draft Members/Invitations | People → Invitations |
-| P08 | Owner approval of an exact Google-only Account ID, identity confirmation, four lower roles and all/selected farms | SQL applied and qualified; interface local, deployment/browser flow pending | Account → Profile → Account ID / Copy; People → Members → More → Add Google account |
+| P08 | Owner approval of an exact Google-only Account ID, identity confirmation, four lower roles and all/selected farms | SQL applied/qualified; interface included in release and sample approval passed; live OAuth pending | Account → Profile → Account ID / Copy; People → Members → More → Add Google account |
 | R01 | Overview performance statement | Draft Reports | Reports → Overview; Overview More |
 | R02 | Task completion/overdue/checklist statement | Draft Reports | Reports → Operations; Tasks/Checklists More |
 | R03 | Income/expense, cash movement/snapshots, targets/budgets, ledger | Draft Reports | Reports → Finances; Finances More |
@@ -157,7 +157,7 @@ These remain in the checklist even when hidden behind progressive disclosure.
 | C08 | Own-data JSON export, guarded account deletion, business-record retention | SQL applied; server credential and live checks still required | Account → More → Data & privacy |
 | C09 | Email-bound pending personal invites, accept/decline | Recovery/password-audit and fresh-proof gates applied and fixture-tested; real email flow unverified | Account → More → Invitations |
 | C10 | Unverified email, wrong method, expired/reused links, removed membership, expiry mid-action | Guards implemented; live edge flows unverified | Contextual feedback / sign-in |
-| C11 | Own Account ID and Copy, without lookup of another person's email | Implemented locally; approval SQL qualified/applied, deployment and live Google flow pending | Account → Profile |
+| C11 | Own Account ID and Copy, without lookup of another person's email | Included in release; sample Copy feedback passed, actual clipboard payload and live Google flow unverified | Account → Profile |
 
 ## Verification status
 
@@ -173,6 +173,13 @@ These remain in the checklist even when hidden behind progressive disclosure.
   widths in both themes. Final Overview HTML control touch-size and Profile/Search
   dirty-form browser rechecks passed. Broader form and physical-device QA remains
   separate from source-level preservation of the checklist.
+- Final release captures passed independent visual review at all four widths in
+  both themes, plus four 360×640 short-phone captures covering Save, identity
+  confirmation, Close and sticky footers. A sample scoped Viewer approval changed
+  members from six to seven; unchecked identity confirmation blocked submission
+  and role/farm display was correct. Account ID Copy showed success feedback;
+  the actual clipboard payload, physical touch and screen-reader behavior remain
+  unverified. All records in these browser checks were invented sample data.
 - The 360 px dark task drawer's sticky save, inline validation and discard prompt
   were inspected; sample task completion updated immediately with a success toast.
   Final sample checks passed Budget Close/saved feedback, Copy's missing-budget
@@ -218,8 +225,8 @@ These remain in the checklist even when hidden behind progressive disclosure.
   passed and committed, with fresh 34-table/catalog checks before commit and
   stored-function/grants/28-table RLS verification afterward. Completion was
   observed at 23:49:35 UTC; the exact commit timestamp was not captured. No CLI
-  history entry was created. The interface still awaits deployment; real browser
-  authorization remains unverified.
+  history entry was created. The interface is included in this release; production
+  deployment is confirmed separately. Real browser authorization remains unverified.
 - Real Auth email/OAuth/TOTP/deletion and actual deployed environment values remain
   unverified. Google provider enablement has been checked after owner-entered
   credentials; remaining provider choices, callbacks/linking and mail delivery

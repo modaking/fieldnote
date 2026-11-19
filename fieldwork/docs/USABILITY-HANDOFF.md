@@ -1,7 +1,7 @@
 # Fieldnote handoff for Ian
 
 Updated 18 November 2026 for the existing `modaking/fieldnote` repository, baseline
-`c2de1a45eaad97d76228e007917aa3bd8cd0587e`. This is a reviewable working draft.
+`c2de1a45eaad97d76228e007917aa3bd8cd0587e`. This handoff describes the included release changes.
 **The three original migrations were applied to the current Fieldnote project on 18 November
 2026 at approximately 21:36 UTC, after approval and successful rollback rehearsals.
 Immediate preservation checks passed. Live provider/account HTTP verification is
@@ -13,7 +13,7 @@ linking remain untested.
 Email/password signup confirmation is temporarily disabled at the owner's request.
 This does not verify an email address; incoming email-invite recovery safeguards
 remain in place. The Google-first signup, hidden Forgot shortcut and Account ID/
-approval interface are still local PR 3 changes awaiting deployment.
+approval interface are included in this release; production deployment is confirmed separately.
 
 ## Preservation and navigation
 
@@ -48,7 +48,7 @@ browser history and context guards preserve the selected section and scope.
 | `js/account.js`, `js/account-client.js`, `api/account.js` | Personal account UI, Auth/Storage client and guarded server actions |
 | `js/reports.js`, `js/statements.js` | Ten scoped statements, preview, binary PDF and real OOXML XLSX |
 
-## Expanded working draft
+## Included features
 
 - Overview separates Summary and More insights. The installed read-only
   `fw_dashboard` computes KPIs, previous comparisons/sparklines, monthly cash
@@ -86,7 +86,7 @@ browser history and context guards preserve the selected section and scope.
   Recovery completion can retry without saving the password twice. Email PKCE
   supports another tab in the same browser and preserves the invitation/return
   intent; Google remains tab-scoped. Another browser/device needs its own link.
-- The local interface for the installed alternative is **Account → Profile → Account ID /
+- The interface for the installed alternative is **Account → Profile → Account ID /
   Copy**, then **People → Members → More → Add Google account**. Only a current
   owner can approve an independently identified person, choosing manager,
   accountant, worker or viewer and all/selected farms. The installed RPC requires
@@ -95,7 +95,7 @@ browser history and context guards preserve the selected section and scope.
   Auth identity, a typed boolean verified-email flag with normalized email matching
   its current Auth email, and no password or other identity. A UID shared with an
   older password is rejected. Existing memberships and email-invite/recovery rules
-  remain unchanged. The local draft temporarily hides the public Forgot password
+  remain unchanged. This release temporarily hides the public Forgot password
   shortcut at the owner's request; reset forms, APIs and callbacks are retained.
 - Tables retain search, filters/chips, columns, sorting, selection, bulk actions,
   CSV and pagination; phone rows become labeled cards. Forms retain field errors,
@@ -227,6 +227,15 @@ retains the form and Save shows confirmation. Farm filtering, income drill-throu
 row-detail drawers, mobile More/filters sheets and Account tab back navigation
 were checked. These are sample-preview checks, not physical-device verification.
 
+Final release captures at all four widths in both light and dark themes passed
+independent visual review. Four additional 360×640 phone captures checked Save,
+identity confirmation, Close and sticky-footer controls. In Chrome using invented
+sample records, a scoped Viewer approval increased members from six to seven;
+the required identity checkbox blocked submission when unchecked, and the new
+role/farm display was correct. Account ID Copy showed a success toast, but the
+clipboard payload was not independently read. Physical touch and screen-reader
+behavior remain unverified; these checks do not establish real Google OAuth.
+
 The final sample Budget check recorded Close month with a saved balance and toast,
 Copy showed the no-prior-budget feedback, and Report opened its finance statement.
 Transaction Add/search worked. Opening/cancelling Filters preserved an invalid
@@ -269,8 +278,9 @@ handoff.
 5. Open exports in desktop Excel and a PDF reader. Native-reader opening remains
    unverified despite parser/render checks. Check long/wide statements and non-Latin
    text.
-6. Deploy the local PR 3 interface changes and verify the complete Google-only
-   joining workflow against the installed fourth upgrade. All four database
+6. Confirm production deployment separately and verify the complete Google-only
+   joining workflow against the installed fourth upgrade. These interface changes
+   are included in this release. All four database
    upgrades are applied; do not replay their SQL. Live provider/HTTP checks still
    prevent a production-readiness claim.
 

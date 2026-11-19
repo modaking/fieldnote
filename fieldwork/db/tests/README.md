@@ -145,4 +145,8 @@ Email/password signup confirmation was temporarily disabled at the owner's
 request through provider settings, not by these SQL files. Incoming email-invite
 proof rules remain unchanged. Manual Google linking is now enabled, but its real
 OAuth flow remains unverified. Google-first signup, the hidden Forgot shortcut and
-Account ID/approval UI are local PR 3 changes awaiting deployment.
+Account ID/approval UI are included in this release; production deployment is
+confirmed separately. Sample browser layout/approval checks passed at four widths
+in both themes and in 360×640 captures; see the [handoff](../../docs/USABILITY-HANDOFF.md).
+They do not verify real OAuth/TOTP/deletion, physical touch, screen readers or the
+actual clipboard payload.

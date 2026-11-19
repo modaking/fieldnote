@@ -16,7 +16,7 @@ Google is enabled in the provider settings. Email/password signup confirmation i
 temporarily disabled at the owner's request; this is not mailbox-ownership proof.
 Manual Google linking is enabled. Real OAuth sign-in/linking remain unverified.
 The Google-first signup, hidden Forgot shortcut and Account ID/approval interface
-are still local PR 3 changes awaiting deployment.
+are included in this release; production deployment is confirmed separately.
 
 ## Navigation and features
 
@@ -75,7 +75,7 @@ email requires recovery again. Editable user metadata is never verification.
 Email links can open in another tab of the same browser; Google keeps a separate
 tab-scoped PKCE verifier. Delivery and real callback flows still need verification.
 
-The local interface for the installed alternative is **Account → Profile → Account ID / Copy**, then
+The interface for the installed alternative is **Account → Profile → Account ID / Copy**, then
 **People → Members → More → Add Google account**. A current owner independently
 identifies the person, enters that exact ID, chooses manager/accountant/worker/viewer
 and all/selected farms, then confirms approval. The installed RPC requires a fresh
@@ -95,8 +95,9 @@ checks before its single commit and verified the stored function/security contra
 afterward. Bundle SHA256:
 `ef75a5ffc3ae15a2f081ad94778bf00025e45f61fba1794b77f31d1be846b57f`.
 No CLI migration-history entry was created. Real OAuth and browser/REST flows remain
-unverified. The draft temporarily hides the public Forgot password shortcut at the
-owner's request; reset code, APIs and callbacks are retained. These UI changes await deployment.
+unverified. This release temporarily hides the public Forgot password shortcut at the
+owner's request; reset code, APIs and callbacks are retained. Production deployment
+is confirmed separately.
 
 Use Vercel root `fieldwork/`, framework Other and no build command. Configure server
 `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Optional `SUPABASE_SERVICE_ROLE_KEY`
@@ -147,6 +148,15 @@ worked; PDF parse/render and openpyxl checks passed. Desktop Excel/PDF-reader,
 live Auth, physical devices, screen readers and production wiring remain
 unverified. SQL rehearsal coverage is distinct from real Auth and browser/REST
 end-to-end checks. See the handoff before release.
+
+Final release UI captures passed independent review at all four widths in light
+and dark themes, plus four short-phone captures at 360×640. Save, identity
+confirmation, Close and sticky-footer controls were checked. In the invented
+sample, adding a scoped Viewer changed members from six to seven, unchecked
+identity confirmation blocked submission, and role/farm display was correct.
+Account ID Copy showed success feedback; its actual clipboard payload, physical
+touch and screen-reader behavior remain unverified. Real OAuth/TOTP/deletion
+remain pending.
 
 ## Money, sample records and theme
 
