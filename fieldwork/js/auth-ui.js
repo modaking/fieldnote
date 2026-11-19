@@ -1,4 +1,4 @@
-import { button, field, tabs, notice, escapeHTML as esc } from './components.js';
+import { button, field, tabs, notice, details, escapeHTML as esc } from './components.js';
 
 // Auth uses the same controls and inline validation as the rest of the app.
 export function formErrors(form, errors = {}) {
@@ -22,37 +22,43 @@ export function wirePasswords(form) {
   }; });
 }
 const emailError = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim()) ? '' : 'Enter a valid email address.';
+// Restore this public shortcut after dedicated SMTP delivery is verified.
+const SHOW_PUBLIC_PASSWORD_RECOVERY = false;
 
 export function renderAuth(container, { auth, onSignedIn, brand, invitePending = false }, mode = 'in', savedEmail = '') {
   window.onhashchange = null;
   const up = mode === 'up', magic = mode === 'magic', recover = mode === 'recover', verify = mode === 'verify';
   const title = up ? 'Create your account' : magic ? 'Email me a sign-in link' : recover ? 'Reset your password' : verify ? 'Verify your email' : 'Welcome back';
   const primary = up ? 'Create account' : magic ? 'Send sign-in link' : recover ? 'Send reset link' : verify ? 'Resend verification email' : 'Sign in';
-  container.innerHTML = `<div class="center auth-screen"><main class="panel auth-panel">${brand()}<h1>${title}</h1><p class="muted">${invitePending ? 'Sign in with the invited email to join your team.' : 'Your farms, people and plans. One clear workspace.'}</p>
-    ${tabs([{ id: 'in', label: 'Sign in' }, { id: 'up', label: 'Create account' }], { label: 'Account access', active: up ? 'up' : 'in' })}
-    <form id="auth" novalidate>${up ? field({ label: 'Your name', name: 'name', required: true, attrs: { autocomplete: 'name', maxlength: 120 } }) : ''}
+  const formHTML=`<form id="auth" novalidate>${up ? field({ label: 'Your name', name: 'name', required: true, attrs: { autocomplete: 'name', maxlength: 120 } }) : ''}
     ${field({ label: 'Email address', name: 'email', type: 'email', value: savedEmail, required: true, attrs: { autocomplete: 'email', inputmode: 'email', autocapitalize: 'none' } })}
     ${!magic && !recover && !verify ? field({ label: 'Password', name: 'password', type: 'password', required: true, hint: up ? 'Use at least 8 characters.' : '', attrs: { autocomplete: up ? 'new-password' : 'current-password', minlength: up ? 8 : 1 } }) : ''}
     <div id="auth-message" aria-live="polite"></div>${button({ label: primary, type: 'submit', attrs: { id: 'auth-submit' } })}
-    </form><div class="auth-links">${!up && !recover && !verify ? button({ label: magic ? 'Use a password' : 'Use a magic link', variant: 'ghost', attrs: { 'data-mode': magic ? 'in' : 'magic' } }) : ''}
-    ${!up && !recover && !magic && !verify ? button({ label: 'Forgot password?', variant: 'ghost', attrs: { 'data-mode': 'recover' } }) : ''}
+    </form>`;
+  const providerHTML=!recover&&!verify?`<div id="auth-google-option" hidden>${up?'':'<div class="auth-divider"><span>or</span></div>'}${button({label:'Continue with Google',variant:up?'primary':'secondary',attrs:{id:'google',disabled:true}})}</div><div id="auth-provider-message" aria-live="polite">${up?'<p class="caption muted">Checking sign-up options…</p>':''}</div>`:'';
+  container.innerHTML = `<div class="center auth-screen"><main class="panel auth-panel">${brand()}<h1>${title}</h1><p class="muted">${invitePending ? 'Sign in with the invited email to join your team.' : 'Your farms, people and plans. One clear workspace.'}</p>
+    ${tabs([{ id: 'in', label: 'Sign in' }, { id: 'up', label: 'Create account' }], { label: 'Account access', active: up ? 'up' : 'in' })}
+    ${up?providerHTML+details({label:'Use email and password',attrs:{id:'email-signup'},body:notice({text:'Email sign-up may require a confirmation link.'})+formHTML}):formHTML}
+    <div class="auth-links">${!up && !recover && !verify ? button({ label: magic ? 'Use a password' : 'Use a magic link', variant: 'ghost', attrs: { 'data-mode': magic ? 'in' : 'magic' } }) : ''}
+    ${SHOW_PUBLIC_PASSWORD_RECOVERY && !up && !recover && !magic && !verify ? button({ label: 'Forgot password?', variant: 'ghost', attrs: { 'data-mode': 'recover' } }) : ''}
     ${recover || verify ? button({ label: 'Back to sign in', variant: 'ghost', attrs: { 'data-mode': 'in' } }) : ''}</div>
-    ${!recover && !verify ? `<div id="auth-google-option" hidden><div class="auth-divider"><span>or</span></div>${button({ label: 'Continue with Google', variant: 'secondary', attrs: { id: 'google',disabled:true } })}</div><div id="auth-provider-message" aria-live="polite"></div>` : ''}
-    <p class="caption muted">${up ? 'Create an account to set up your farm workspace.' : 'Sign in securely with the account you use for your workspace.'}</p></main></div>`;
+    ${up?'':providerHTML}
+    <p class="caption muted">${up ? 'Create an account to set up your farm workspace.' : magic ? 'Email sign-in is currently available to a limited test group. Use your password if no link arrives.' : 'Sign in securely with the account you use for your workspace.'}</p></main></div>`;
   const form = container.querySelector('#auth'), message = container.querySelector('#auth-message');
   const controls=[...container.querySelectorAll('button')];let requestPending=false,googleAvailable=false;
   const current=()=>container.querySelector('#auth')===form;
   const pending=(state)=>{requestPending=state;controls.forEach(control=>control.disabled=state);form.setAttribute('aria-busy',String(state));};
   const change = (next) => renderAuth(container, { auth, onSignedIn, brand, invitePending }, next, form.elements.email.value);
   const providerSlot=container.querySelector('#auth-google-option'),providerMessage=container.querySelector('#auth-provider-message');
-  const loadProviders=async(refresh=false)=>{if(!providerSlot)return;try{const options=await auth.capabilities({refresh});if(!current())return;googleAvailable=options.google===true;providerSlot.hidden=!googleAvailable;container.querySelector('#google').disabled=requestPending||!googleAvailable;providerMessage.innerHTML='';}
-    catch(error){if(!current())return;googleAvailable=false;providerSlot.hidden=true;providerMessage.innerHTML=notice({text:'Other sign-in options are temporarily unavailable. '+error.message,tone:'warning',action:button({label:'Try again',variant:'ghost',attrs:{id:'provider-retry'}})});providerMessage.querySelector('#provider-retry')?.addEventListener('click',()=>loadProviders(true));}};
+  const providerState=enabled=>{googleAvailable=enabled;providerSlot.hidden=!enabled;container.querySelector('#google').disabled=requestPending||!enabled;if(up){container.querySelector('#auth-submit').classList.toggle('secondary',enabled);if(!enabled)container.querySelector('#email-signup').open=true;}};
+  const loadProviders=async(refresh=false)=>{if(!providerSlot)return;try{const options=await auth.capabilities({refresh});if(!current())return;providerState(options.google===true);providerMessage.innerHTML='';}
+    catch(error){if(!current())return;providerState(false);providerMessage.innerHTML=notice({text:'Other sign-in options are temporarily unavailable. '+error.message,tone:'warning',action:button({label:'Try again',variant:'ghost',attrs:{id:'provider-retry'}})});providerMessage.querySelector('#provider-retry')?.addEventListener('click',()=>loadProviders(true));}};
   loadProviders();
   container.querySelectorAll('[data-tab], [data-mode]').forEach((tab) => { tab.onclick = () => {if(!requestPending)change(tab.dataset.tab || tab.dataset.mode);}; });
   wirePasswords(form);
   container.querySelector('#google')?.addEventListener('click', async (event) => {
-    const btn = event.currentTarget; if (btn.disabled) return; pending(true);busy(btn, true); message.innerHTML = '';
-    try { await auth.google(); } catch (error) { if(current())message.innerHTML = notice({ text: error.message, tone: 'negative' }); pending(false);busy(btn, false); }
+    const btn = event.currentTarget; if (btn.disabled) return; pending(true);busy(btn, true); message.innerHTML = '';if(up)providerMessage.innerHTML='';
+    try { await auth.google(); } catch (error) { if(current())(up?providerMessage:message).innerHTML = notice({ text: error.message, tone: 'negative' }); pending(false);busy(btn, false); }
   });
   form.onsubmit = async (event) => {
     event.preventDefault(); const btn = form.querySelector('[type=submit]'); if (btn.disabled) return;

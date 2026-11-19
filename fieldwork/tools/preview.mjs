@@ -24,6 +24,16 @@ for (const role of roles) {
   tables.profiles.push({ id: `preview-${role}`, full_name: `Sample ${role}`, active_workspace: 'workspace-a', theme_pref: 'system',language:'en',time_zone:'Africa/Nairobi',default_period:'month',phone:null,avatar_path:null,default_farm_id:null });
   for (const ws of tables.workspaces) tables.workspace_members.push({ user_id: `preview-${role}`, workspace_id: ws.id, role, farm_scope: ['worker','viewer'].includes(role) ? 'farms' : 'all', farm_ids: ['worker','viewer'].includes(role) ? [ws.id === 'workspace-a' ? 'farm-a' : 'farm-other'] : [], created_at: at });
 }
+// Invented account records, initially outside both sample workspaces. The first
+// is Google-only; the second simulates an unsafe mixed password/Google account.
+// These UUIDs and identity details exist only in memory, never in Supabase.
+export const SAMPLE_EXISTING_ACCOUNT_ID='f1000000-0000-4000-8000-000000000001';
+export const SAMPLE_MIXED_ACCOUNT_ID='f1000000-0000-4000-8000-000000000002';
+const sampleJoinAccounts=new Map([
+  [SAMPLE_EXISTING_ACCOUNT_ID,{email:'google-only@fieldwork.test',has_password:false,identities:[{provider:'google',email:'google-only@fieldwork.test',email_verified:true}]}],
+  [SAMPLE_MIXED_ACCOUNT_ID,{email:'mixed@fieldwork.test',has_password:true,identities:[{provider:'google',email:'mixed@fieldwork.test',email_verified:true},{provider:'email',email:'mixed@fieldwork.test'}]}],
+]);
+for(const[id,account]of sampleJoinAccounts)tables.profiles.push({id,full_name:account.has_password?'Sample mixed-credential account':'Sample Google-only account',active_workspace:null,theme_pref:'system',language:'en',time_zone:'Africa/Nairobi',default_period:'month'});
 tables.farms = [{ id: 'farm-a', workspace_id: 'workspace-a', name: 'Ol Kalou sample farm', county: 'Nyandarua', location_text: 'Sample farm near Ol Kalou', created_at: at },
   { id: 'farm-b', workspace_id: 'workspace-a', name: 'Mashuru sample farm', county: 'Kajiado', location_text: 'Sample farm near Mashuru', created_at: at },
   { id: 'farm-other', workspace_id: 'workspace-b', name: 'Other workspace sample farm', created_at: at }];
@@ -307,6 +317,21 @@ async function rpc(req,res,name,identity) {
   if(name==='fw_list_invites')return tableResult(tables.workspace_invites.filter((i)=>i.workspace_id===ws).map(({token,...i})=>i));
   const target=tables.workspace_members.find((m)=>m.workspace_id===ws&&m.user_id===data.p_user_id);
   const validate=(oldRole,nextRole,farmIds)=>canManageMember(actor.role,oldRole,nextRole)&&(!['owner','admin'].includes(nextRole)||farmIds==null)&&(!farmIds||farmIds.length>0&&farmIds.every((id)=>tables.farms.some((f)=>f.id===id&&f.workspace_id===ws)));
+  if(name==='fw_add_member_by_id'){
+    if(actor.role!=='owner')return fail('Only a current sample workspace owner can approve an account ID.');
+    let claims;try{claims=JSON.parse(Buffer.from(req.headers.authorization.replace(/^Bearer /,'').split('.')[1],'base64url'));}catch{}
+    const fresh=(Array.isArray(claims?.amr)?claims.amr:[]).some(item=>['password','oauth','otp','magiclink','sso/saml'].includes(item.method)&&Number.isFinite(item.timestamp)&&item.timestamp>=Date.now()/1000-600&&item.timestamp<=Date.now()/1000+30);
+    if(!fresh)return fail('Sign in again before approving a new sample workspace member.');
+    if(identities.get(identity).factors.some(f=>f.status==='verified')&&claims?.aal!=='aal2')return fail('Verify the sample authenticator before approving access.');
+    if(!['manager','accountant','worker','viewer'].includes(data.p_role)||typeof data.p_user_id!=='string'||!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(data.p_user_id)||data.p_user_id===uid||!tables.profiles.some(p=>p.id===data.p_user_id))return json(res,400,{message:'Choose an existing permanent sample account ID and an allowed role.',code:'22023'});
+    if(target)return json(res,409,{message:'This sample account is already a member; use Change access instead.',code:'23505'});
+    const account=sampleJoinAccounts.get(data.p_user_id),google=account?.identities?.[0];
+    if(!account||account.has_password||account.identities.length!==1||google.provider!=='google'||google.email_verified!==true||google.email.toLowerCase()!==account.email.toLowerCase())return json(res,400,{message:'This joining option requires an account that uses only Google, with no password or other sign-in method. This is a simulated eligibility result, not a real Google check.',code:'22023'});
+    if(data.p_farm_ids!=null&&(!Array.isArray(data.p_farm_ids)||!data.p_farm_ids.length||data.p_farm_ids.some(id=>!tables.farms.some(f=>f.id===id&&f.workspace_id===ws))))return json(res,400,{message:'Choose at least one available sample farm, or All farms.',code:'22023'});
+    const farm_ids=[...new Set(data.p_farm_ids||[])],farm_scope=data.p_farm_ids==null?'all':'farms',row={workspace_id:ws,user_id:data.p_user_id,role:data.p_role,farm_scope,farm_ids,created_at:new Date().toISOString()};
+    tables.workspace_members.push(row);tables.audit_log.push({id:randomUUID(),workspace_id:ws,table_name:'workspace_members',action:'INSERT',actor:uid,new_data:{...row},at:new Date().toISOString()});
+    return json(res,200,{user_id:row.user_id,role:row.role,farm_scope,farm_ids});
+  }
   if(name==='fw_create_invite') {
     if(!validate('worker',data.p_role,data.p_farm_ids))return fail('Choose an allowed sample role and farm assignment.');
     if(tables.workspace_members.some((m)=>m.workspace_id===ws&&`${m.user_id.replace('preview-','')}@fieldwork.test`===data.p_email.toLowerCase()))return failure(res,400,'This sample account is already a member.');

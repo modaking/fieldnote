@@ -3,10 +3,14 @@ import {readRpcAll} from './read-all.js';
 import * as C from './components.js';
 import { ROLE_OPTIONS, canManageMembers, canManageMember } from './permissions.js';
 import { buildInviteURL } from './invites.js';
+import { formErrors } from './auth-ui.js';
+import { registerUnsaved, confirmLeave } from './feedback.js';
 
 const PAGE_SIZE = 15;
 const date = (value) => value ? new Date(value).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
 const roleLabel = (role) => ROLE_OPTIONS.find((item) => item.value === role)?.label || role;
+const MANUAL_ROLES = ['manager','accountant','worker','viewer'];
+const accountID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
 
 export function memberTab(options={},hash='') {
   if(['members','invites'].includes(options.tab))return options.tab;
@@ -67,7 +71,7 @@ export async function members(el, X, options = {}) {
         : [{ label: 'Change access', attrs: { 'data-change': row.user_id } }, { label: 'Remove member', variant: 'danger', attrs: { 'data-remove': row.user_id } }] });
     };
     el.innerHTML = C.pageHeader({ title: pageTitle, description: 'Control who can access your workspace and each farm.',
-      actions: (X.report ? C.button({ label: 'Report', variant: 'secondary', attrs: { 'data-member-report': true } }) : '') + C.button({ label: 'Invite member', attrs: { 'data-invite-member': true } }) })
+      actions: (X.report ? C.button({ label: 'Report', variant: 'secondary', attrs: { 'data-member-report': true } }) : '') + C.button({ label: 'Invite member', attrs: { 'data-invite-member': true } }) + (S.role === 'owner' ? C.actionMenu({label:'More member actions',text:'More',items:[{label:'Add Google account',attrs:{'data-add-existing-member':true}}]}) : '') })
       + (options.hideTabs?'':C.tabs([{ id: 'members', label: `Members (${memberRows.length})` }, { id: 'invites', label: `Invitations (${inviteRows.filter((row) => row.status === 'pending').length})` }], { active: selectedTab, label: 'Team access' }))
       + `<section class="card"><div class="resource-toolbar">${C.input({ name: 'member-search', id: 'member-search', type: 'search', value: search, attrs: { placeholder: 'Search names, email or farm…', 'aria-label': 'Search team access' } })}${C.select({ name: 'member-role', id: 'member-role', value: role, options: [{ value: '', label: 'All roles' }, ...ROLE_OPTIONS], attrs: { 'aria-label': 'Filter by role' } })}<span class="caption muted" aria-live="polite">${filtered.length} ${invitations ? 'invitations' : 'members'}</span></div>`
       + (rows.length ? `<div class="table-wrap">${C.dataTable({ columns, rows, caption: invitations ? 'Workspace invitations' : 'Workspace members', rowKey: invitations ? 'id' : 'user_id', sort, actions })}</div>`
@@ -75,6 +79,7 @@ export async function members(el, X, options = {}) {
       + `<footer class="resource-pagination"><span class="caption muted">Page ${page} of ${pages}</span>${C.button({ label: 'Previous', variant: 'ghost', size: 'sm', attrs: { 'data-member-page': page - 1, disabled: page === 1 } })}${C.button({ label: 'Next', variant: 'ghost', size: 'sm', attrs: { 'data-member-page': page + 1, disabled: page === pages } })}</footer></section>`
       + C.notice({ title: 'Roles are enforced by the database', text: 'Owners and administrators manage the team. Workers and viewers cannot access financial records or pay. Removing a member preserves farm records.' });
     el.querySelectorAll('[data-invite-member]').forEach((button) => { button.onclick = () => accessDrawer(); });
+    el.querySelector('[data-add-existing-member]')?.addEventListener('click', existingAccountDrawer);
     el.querySelector('[data-member-report]')?.addEventListener('click', () => X.report('members'));
     el.querySelectorAll('[data-tab]').forEach((button) => {
       button.onclick = () => { selectedTab = button.dataset.tab; page = 1; paint(); };
@@ -95,6 +100,50 @@ export async function members(el, X, options = {}) {
     el.querySelectorAll('[data-change]').forEach((button) => { button.onclick = () => accessDrawer(memberRows.find((row) => row.user_id === button.dataset.change)); });
     el.querySelectorAll('[data-remove]').forEach((button) => { button.onclick = () => confirmAction('Remove member?', `Remove ${memberRows.find((row) => row.user_id === button.dataset.remove)?.email || 'this member'} from this workspace? Their access ends immediately; farm records remain.`, 'Remove member', 'fw_remove_member', { p_user_id: button.dataset.remove }, true); });
     el.querySelectorAll('[data-revoke]').forEach((button) => { button.onclick = () => confirmAction('Revoke invitation?', 'This invitation link will stop working. You can create another invitation later.', 'Revoke invitation', 'fw_revoke_invite', { p_invite_id: button.dataset.revoke }); });
+  }
+
+  async function existingAccountDrawer() {
+    if(!active()||S.role!=='owner'||!await confirmLeave()||!active()||S.role!=='owner')return;
+    const dialog=X.dlg(),roles=ROLE_OPTIONS.filter(option=>MANUAL_ROLES.includes(option.value));
+    const farms=S.farms.map(farm=>`<label class="check"><input type="checkbox" name="farm_ids" value="${esc(farm.id)}">${esc(farm.name)}</label>`).join('');
+    dialog.className='ui-panel ui-drawer';dialog.setAttribute('aria-labelledby','ui-drawer-title');
+    dialog.innerHTML=C.drawerContent({title:'Add a Google account',description:'Ask the person to sign in using only Google, then share their Account ID from Account → Profile privately. Accounts with a password or another sign-in method cannot use this option.',
+      body:`<form novalidate>${C.field({label:'Account ID',name:'user_id',required:true,hint:'Paste the exact account ID. This does not search by email or send an email.',attrs:{autocomplete:'off',spellcheck:false,maxlength:36}})}${C.field({label:'Role',name:'role',type:'select',value:'worker',required:true,options:roles})}<p id="existing-role-hint" class="ui-hint"></p>${C.field({label:'Farm access',name:'scope',type:'select',value:'all',options:[{value:'all',label:'All farms'},{value:'selected',label:'Selected farms'}]})}<fieldset id="existing-member-farms" hidden><legend>Allowed farms</legend>${farms||'<p class="muted">Add a farm before choosing farm-specific access.</p>'}</fieldset><div class="field"><label class="check"><input type="checkbox" name="verified_person" aria-describedby="existing-person-error">I have checked that this account ID belongs to the person I intend to add.</label><small id="existing-person-error" class="ui-field-error" data-error-for="verified_person" hidden></small></div><div id="existing-member-message" aria-live="polite"></div><div class="actions">${C.button({label:'Cancel',variant:'ghost',attrs:{'data-existing-cancel':true}})}${C.button({label:'Add Google account',type:'submit'})}</div></form>`});
+    const form=dialog.querySelector('form'),submit=form.querySelector('[type=submit]'),status=form.querySelector('#existing-member-message');
+    const current=()=>active()&&S.role==='owner'&&dialog.open&&dialog.querySelector('form')===form;
+    let saving=false,completed=false;
+    const values=()=>({user_id:form.elements.user_id.value.trim().toLowerCase(),role:form.elements.role.value,scope:form.elements.scope.value,
+      farm_ids:[...form.querySelectorAll('[name=farm_ids]:checked')].map(input=>input.value),verified_person:form.elements.verified_person.checked});
+    const baseline=JSON.stringify(values()),unregister=registerUnsaved({element:form,isDirty:()=>!completed&&JSON.stringify(values())!==baseline,isSaving:()=>saving,isActive:current});
+    const close=async()=>{if(!current()||!await confirmLeave())return;unregister();dialog.close();};
+    dialog.querySelector('[data-drawer-close]').onclick=close;form.querySelector('[data-existing-cancel]').onclick=close;dialog.oncancel=event=>{event.preventDefault();close();};
+    const syncScope=()=>{form.querySelector('#existing-member-farms').hidden=form.elements.scope.value!=='selected';form.querySelector('#existing-role-hint').textContent=ROLE_OPTIONS.find(option=>option.value===form.elements.role.value)?.description||'';};
+    form.elements.role.onchange=syncScope;form.elements.scope.onchange=syncScope;syncScope();
+    form.onsubmit=async event=>{
+      event.preventDefault();if(saving||!current())return;
+      const data=values(),errors={};
+      if(!accountID.test(data.user_id))errors.user_id='Paste a complete account ID from the person’s profile.';
+      else if(data.user_id===String(uid).toLowerCase())errors.user_id='You are already a member. Choose another person’s account ID.';
+      else if(memberRows.some(member=>member.user_id.toLowerCase()===data.user_id))errors.user_id='This account is already a member. Use Change access instead.';
+      if(!MANUAL_ROLES.includes(data.role))errors.role='Choose Manager, Accountant, Worker or Viewer.';
+      if(!['all','selected'].includes(data.scope)||data.scope==='selected'&&(!data.farm_ids.length||data.farm_ids.some(id=>!S.farms.some(farm=>farm.id===id))))errors.scope='Choose at least one available farm, or choose All farms.';
+      if(!data.verified_person)errors.verified_person='Confirm that you have checked the intended person’s account ID.';
+      if(!formErrors(form,errors))return;
+      saving=true;form.querySelectorAll('input,select,button').forEach(control=>control.disabled=true);submit.setAttribute('aria-busy','true');status.innerHTML='';
+      try{
+        const result=await db.rpc('fw_add_member_by_id',{p_workspace_id:ws,p_user_id:data.user_id,p_role:data.role,p_farm_ids:data.scope==='selected'?data.farm_ids:null});
+        if(!current())return;
+        if(result?.user_id?.toLowerCase()!==data.user_id||result.role!==data.role)throw new Error('The access change could not be confirmed. Refresh Members before trying again.');
+        completed=true;unregister();dialog.close();message('Google account added. The person can reopen the app to access this workspace.','positive');await load();
+      }catch(error){
+        if(!current())return;
+        const unavailable=error.status===404||error.details?.code==='PGRST202';
+        const text=unavailable?'This joining option is not available yet. Please try again later.'
+          :error.status===0?'The connection was interrupted. The account may already have been added. Close this form and refresh Members before trying again.':error.message;
+        status.innerHTML=C.notice({text,tone:'negative'});
+      }finally{saving=false;if(form.isConnected){form.querySelectorAll('input,select,button').forEach(control=>control.disabled=false);submit.setAttribute('aria-busy','false');}}
+    };
+    dialog.showModal();form.elements.user_id.focus();
   }
 
   function accessDrawer(row = null) {

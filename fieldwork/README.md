@@ -4,12 +4,19 @@ Plain HTML/CSS/JavaScript, Supabase REST/Auth/Storage and Vercel `/api` function
 No build step or added runtime libraries. Architecture, stored records and ISO
 currency **minor units** are retained (KES 100 = KSh 1).
 
-This is release preparation. **All three database upgrades were applied to the
+This is release preparation. **The three original database upgrades were applied to the
 current Fieldnote project on 18 November 2026 at approximately 21:36 UTC, after
 approval and successful rollback rehearsals. Original farm data was preserved;
 live email/Google/MFA and other account HTTP flows still need verification.** Read
 [Ian's handoff](docs/USABILITY-HANDOFF.md) for release checks and the
 [feature inventory](docs/FEATURE-INVENTORY.md) for preservation mapping.
+The fourth, Google-only owner-approval upgrade is also **applied**, after separate
+qualification and approval. Its completion was observed at 23:49:35 UTC on 18 November.
+Google is enabled in the provider settings. Email/password signup confirmation is
+temporarily disabled at the owner's request; this is not mailbox-ownership proof.
+Manual Google linking is enabled. Real OAuth sign-in/linking remain unverified.
+The Google-first signup, hidden Forgot shortcut and Account ID/approval interface
+are still local PR 3 changes awaiting deployment.
 
 ## Navigation and features
 
@@ -35,8 +42,9 @@ unsupported characters; preview/XLSX preserve Unicode.
 ## Applied database upgrades
 
 For a **fresh disposable project only**, initialize `db/schema.sql` once. Never
-rerun it over the existing farm database. These files were applied through one
-reviewed atomic SQL bundle; **do not rerun the originals on the current project**:
+rerun it over the existing farm database. The original three files were applied
+through one reviewed atomic bundle, followed by a separately approved forward
+installation. **Do not rerun any of these four files on the current project**:
 
 1. `db/migrations/20261118_members_roles.sql` — six roles/farm scope, invitations,
    audit restrictions, project budgets, vendor bills and enterprise financial links.
@@ -44,8 +52,10 @@ reviewed atomic SQL bundle; **do not rerun the originals on the current project*
    and a checked, server-recomputed farm month close.
 3. `db/migrations/20261118_account.sql` — own preferences/avatars/sessions,
    optional MFA enforcement, revoked-session rejection and checked invitation recovery.
+4. `db/migrations/20261118224325_owner_approved_membership.sql` — checked owner
+   approval of an eligible Google-only Account ID, retaining the existing role/farm model.
 
-All three SQL suites in `db/tests/` passed on the current project inside one
+The three original SQL suites in `db/tests/` passed on the current project inside one
 reviewed transaction with fixture-isolating savepoints and a final rollback.
 The latest recovery-extended run passed all three suites on its first attempt,
 including 1,005-row finance totals/server close, role/farm-scope rejections,
@@ -65,16 +75,40 @@ email requires recovery again. Editable user metadata is never verification.
 Email links can open in another tab of the same browser; Google keeps a separate
 tab-scoped PKCE verifier. Delivery and real callback flows still need verification.
 
+The local interface for the installed alternative is **Account → Profile → Account ID / Copy**, then
+**People → Members → More → Add Google account**. A current owner independently
+identifies the person, enters that exact ID, chooses manager/accountant/worker/viewer
+and all/selected farms, then confirms approval. The installed RPC requires a fresh
+primary sign-in, active own session and any enrolled MFA. The target must have
+exactly one Google identity, a typed verified-email flag matching its current email,
+and no password or other provider identity. This prevents approving a shared UID
+whose older password could still belong to someone else. Existing memberships and
+the email-invitation/recovery path stay unchanged.
+
+[The forward migration](db/migrations/20261118224325_owner_approved_membership.sql)
+is **applied**. [Its suite](db/tests/20261118224325_owner_approved_membership.test.sql)
+passed on the current PostgreSQL project in the reviewed `16596ef9…` rollback batch,
+including fresh whole-row preservation across 34 public/Auth/Storage tables. The
+separate TEMP catalog/EOL probe also passed. Those rehearsals retained no function
+or fixtures. The approved installation then passed fresh 34-table data/catalog
+checks before its single commit and verified the stored function/security contract
+afterward. Bundle SHA256:
+`ef75a5ffc3ae15a2f081ad94778bf00025e45f61fba1794b77f31d1be846b57f`.
+No CLI migration-history entry was created. Real OAuth and browser/REST flows remain
+unverified. The draft temporarily hides the public Forgot password shortcut at the
+owner's request; reset code, APIs and callbacks are retained. These UI changes await deployment.
+
 Use Vercel root `fieldwork/`, framework Other and no build command. Configure server
 `SUPABASE_URL` and `SUPABASE_ANON_KEY`. Optional `SUPABASE_SERVICE_ROLE_KEY`
 enables guarded deletion **server-side only**; never put it in browser code, public
-configuration or source. The owner must configure mail delivery, Auth audit logging,
-Google credentials and redirects directly in the provider consoles. Actual deployed
+configuration or source. Google provider enablement was verified after owner-entered
+credentials; live callbacks/linking and mail delivery still need testing. Any remaining
+provider configuration belongs directly in the provider consoles. Actual deployed
 environment values and live account flows still need verification; checking variable
 names alone does not verify wiring. Ordinary static hosting does not serve `/api/config`
 or `/api/account`.
 
-The final installation used bundle SHA256
+The original three-upgrade installation used bundle SHA256
 `2c7bdf1673905e51a8e992aab74b8afb1710a52f8b8440083e6c585a6bd31993`.
 Immediate fresh read-only checks preserved all **98 original rows across 24 public
 tables** and the whole-row Auth/Storage digests; fixtures were removed before
@@ -93,7 +127,9 @@ node --experimental-vm-modules --test tests/*.test.mjs db/tests/*.test.mjs
 node tools/preview.mjs
 ```
 
-Latest full run: **250 JavaScript tests pass**.
+The combined automated suite passes **261 tests**. Separately, **17 private installer
+compiler/artifact tests pass**; these are not live OAuth tests. The new owner-approval
+PostgreSQL rollback suite, TEMP catalog probe and approved installation checks passed.
 Static checks resolve 22 browser modules, two APIs, 12 business routes, five pages,
 16 sections and 12 assets; all 32 configured contrast pairs pass in each theme.
 The loopback preview uses invented in-memory records,
